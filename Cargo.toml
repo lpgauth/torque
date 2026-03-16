@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["native/torque_nif"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
