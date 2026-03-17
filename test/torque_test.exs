@@ -177,6 +177,60 @@ defmodule Torque.PointerTest do
     end
   end
 
+  describe "get_many_nil/2" do
+    test "returns values directly with nil for missing", %{doc: doc} do
+      paths = ["/id", "/site/domain", "/device/devicetype", "/nonexistent"]
+      assert ["req-123", "example.com", 2, nil] = Torque.get_many_nil(doc, paths)
+    end
+
+    test "empty paths list", %{doc: doc} do
+      assert [] = Torque.get_many_nil(doc, [])
+    end
+
+    test "matches get_many unwrapped", %{doc: doc} do
+      paths = [
+        "/id",
+        "/site/domain",
+        "/site/page",
+        "/site/publisher/id",
+        "/device/devicetype",
+        "/device/geo/lat",
+        "/device/geo/lon",
+        "/user/ext/eids",
+        "/imp",
+        "/nonexistent",
+        "/regs/coppa"
+      ]
+
+      wrapped = Torque.get_many(doc, paths)
+      unwrapped = Torque.get_many_nil(doc, paths)
+
+      expected =
+        Enum.map(wrapped, fn
+          {:ok, v} -> v
+          {:error, :no_such_field} -> nil
+        end)
+
+      assert unwrapped == expected
+    end
+  end
+
+  describe "length/2" do
+    test "returns array length", %{doc: doc} do
+      assert 1 = Torque.length(doc, "/imp")
+      assert 2 = Torque.length(doc, "/user/ext/eids")
+    end
+
+    test "returns nil for non-array", %{doc: doc} do
+      assert nil == Torque.length(doc, "/id")
+      assert nil == Torque.length(doc, "/site")
+    end
+
+    test "returns nil for missing path", %{doc: doc} do
+      assert nil == Torque.length(doc, "/nonexistent")
+    end
+  end
+
   describe "parse/1 errors" do
     test "invalid json" do
       assert {:error, _} = Torque.parse("{invalid}")

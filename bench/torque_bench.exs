@@ -184,6 +184,10 @@ Benchee.run(
       {:ok, doc} = Torque.parse(openrtb_json)
       Torque.get_many(doc, fields)
     end,
+    "torque parse+get_many_nil" => fn ->
+      {:ok, doc} = Torque.parse(openrtb_json)
+      Torque.get_many_nil(doc, fields)
+    end,
     "simdjsone parse+get" => fn ->
       ref = :simdjson.parse(openrtb_json)
       for f <- fields, do: :simdjson.get(ref, f)

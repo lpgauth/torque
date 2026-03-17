@@ -99,6 +99,40 @@ defmodule Torque do
   end
 
   @doc """
+  Extracts multiple values from a parsed document, returning `nil` for missing fields.
+
+  Like `get_many/2` but returns bare values instead of `{:ok, value}` tuples.
+  Missing fields return `nil` (indistinguishable from JSON `null`).
+
+  This is faster than `get_many/2` when you don't need to distinguish between
+  missing fields and null values, as it avoids allocating wrapper tuples.
+
+  ## Examples
+
+      {:ok, doc} = Torque.parse(~s({"a":1,"b":null}))
+      [1, nil, nil] = Torque.get_many_nil(doc, ["/a", "/b", "/c"])
+  """
+  @spec get_many_nil(reference(), [binary()]) :: [term()]
+  def get_many_nil(doc, paths) when is_reference(doc) and is_list(paths) do
+    Torque.Native.get_many_nil(doc, paths)
+  end
+
+  @doc """
+  Returns the length of an array at the given JSON Pointer path, or `nil` if
+  the path does not exist or does not point to an array.
+
+  ## Examples
+
+      {:ok, doc} = Torque.parse(~s({"a":[1,2,3]}))
+      3 = Torque.length(doc, "/a")
+      nil = Torque.length(doc, "/missing")
+  """
+  @spec length(reference(), binary()) :: non_neg_integer() | nil
+  def length(doc, path) when is_reference(doc) and is_binary(path) do
+    Torque.Native.array_length(doc, path)
+  end
+
+  @doc """
   Decodes a JSON binary into Elixir terms.
 
   JSON objects become maps with binary keys, arrays become lists, strings become

@@ -25,4 +25,6 @@ defmodule Torque.Native do
   def decode_dirty(_json), do: :erlang.nif_error(:nif_not_loaded)
   def encode(_term), do: :erlang.nif_error(:nif_not_loaded)
   def encode_iodata(_term), do: :erlang.nif_error(:nif_not_loaded)
+  def get_many_nil(_doc, _paths), do: :erlang.nif_error(:nif_not_loaded)
+  def array_length(_doc, _path), do: :erlang.nif_error(:nif_not_loaded)
 end

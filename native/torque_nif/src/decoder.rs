@@ -4,7 +4,7 @@ use crate::types::value_to_term;
 use crate::ParsedDocument;
 use rustler::sys::{enif_make_list_from_array, ERL_NIF_TERM};
 use rustler::{Binary, Encoder, Env, ListIterator, ResourceArc, Term};
-use sonic_rs::JsonValueTrait;
+use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 
 const GET_MANY_STACK: usize = 64;
 
@@ -159,6 +159,22 @@ fn get_many<'a>(
     }
 }
 
+#[rustler::nif]
+fn array_length<'a>(env: Env<'a>, doc: ResourceArc<ParsedDocument>, path: &str) -> Term<'a> {
+    match pointer_lookup(&doc.value, path) {
+        Some(value) if value.is_array() => {
+            let len = value.as_array().unwrap().len();
+            unsafe {
+                Term::new(
+                    env,
+                    rustler::sys::enif_make_uint64(env.as_c_arg(), len as u64),
+                )
+            }
+        }
+        _ => atoms::nil().to_term(env),
+    }
+}
+
 fn do_decode<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
     match sonic_rs::from_slice::<sonic_rs::Value>(bytes) {
         Ok(value) => make_tuple2(
@@ -182,4 +198,65 @@ fn decode<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn decode_dirty<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
     do_decode(env, json.as_slice())
+}
+
+#[rustler::nif]
+fn get_many_nil<'a>(
+    env: Env<'a>,
+    doc: ResourceArc<ParsedDocument>,
+    paths: ListIterator<'a>,
+) -> Term<'a> {
+    let nil_raw = atoms::nil().as_c_arg();
+
+    let mut stack: [ERL_NIF_TERM; GET_MANY_STACK] = [0; GET_MANY_STACK];
+    let mut count = 0;
+    let mut heap: Option<Vec<ERL_NIF_TERM>> = None;
+
+    for path_term in paths {
+        let path: &str = match path_term.decode() {
+            Ok(p) => p,
+            Err(_) => {
+                if count < GET_MANY_STACK && heap.is_none() {
+                    stack[count] = nil_raw;
+                } else {
+                    heap.get_or_insert_with(|| {
+                        let mut v = Vec::with_capacity(GET_MANY_STACK * 2);
+                        v.extend_from_slice(&stack[..count]);
+                        v
+                    })
+                    .push(nil_raw);
+                }
+                count += 1;
+                continue;
+            }
+        };
+
+        let r = match pointer_lookup(&doc.value, path) {
+            Some(value) => value_to_term(env, value).as_c_arg(),
+            None => nil_raw,
+        };
+        if count < GET_MANY_STACK && heap.is_none() {
+            stack[count] = r;
+        } else {
+            heap.get_or_insert_with(|| {
+                let mut v = Vec::with_capacity(GET_MANY_STACK * 2);
+                v.extend_from_slice(&stack[..count]);
+                v
+            })
+            .push(r);
+        }
+        count += 1;
+    }
+
+    let terms = match &heap {
+        Some(v) => v.as_slice(),
+        None => &stack[..count],
+    };
+
+    unsafe {
+        Term::new(
+            env,
+            enif_make_list_from_array(env.as_c_arg(), terms.as_ptr(), count as u32),
+        )
+    }
 }
