@@ -42,6 +42,10 @@ defmodule Torque.DecodeTest do
       assert {:ok, %{"a" => "b", "c" => "d"}} = Torque.decode(~s({"a":"b","c":"d"}))
     end
 
+    test "object with duplicate keys" do
+      assert {:ok, %{"a" => 3, "b" => 2}} = Torque.decode(~s({"a":1,"b":2,"a":3}))
+    end
+
     test "nested object" do
       json = ~s({"site":{"domain":"example.com"}})
       assert {:ok, %{"site" => %{"domain" => "example.com"}}} = Torque.decode(json)

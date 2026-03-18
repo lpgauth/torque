@@ -139,6 +139,8 @@ defmodule Torque do
   binaries, numbers become integers or floats, booleans become `true`/`false`,
   and `null` becomes `nil`.
 
+  For objects with duplicate keys, the last key wins.
+
   Automatically uses a dirty CPU scheduler for inputs larger than 10 KB.
   """
   @spec decode(binary()) :: {:ok, term()} | {:error, binary()}
