@@ -1,4 +1,4 @@
-# Benchmark: Torque vs simdjsone vs jiffy
+# Benchmark: Torque vs simdjsone, jiffy, Jason, OTP JSON
 #
 # Run with: MIX_ENV=bench mix run bench/torque_bench.exs
 
@@ -217,10 +217,162 @@ Benchee.run(
     "jiffy encode (proplist)" => fn -> :jiffy.encode(bid_response_proplist, [:force_utf8]) end,
     "jiffy encode (map)" => fn -> :jiffy.encode(bid_response) end,
     "jason encode (map)" => fn -> Jason.encode!(bid_response) end,
+    "simdjsone encode (map)" => fn -> :simdjson.encode(bid_response) end,
     "otp json encode (iodata)" => fn -> :json.encode(bid_response) end,
     "otp json encode (binary)" => fn -> :erlang.iolist_to_binary(:json.encode(bid_response)) end,
     "simdjsone encode (proplist)" => fn -> :simdjson.encode(bid_response_proplist) end,
     "simdjson encode (map)" => fn -> :simdjson.encode(bid_response) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)
+
+IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
+
+# Generate a synthetic ~750 KB JSON payload resembling a Twitter API response.
+# Each status entry contains a full user object, entities, and metadata (~2.4 KB/entry).
+large_json =
+  Jason.encode!(%{
+    "statuses" =>
+      Enum.map(1..320, fn i ->
+        uid = rem(i, 200)
+
+        %{
+          "metadata" => %{"result_type" => "recent", "iso_language_code" => "en"},
+          "created_at" => "Sun Aug 31 00:29:15 +0000 2014",
+          "id" => 505_874_924_000_000_000 + i,
+          "id_str" => Integer.to_string(505_874_924_000_000_000 + i),
+          "text" =>
+            "Sample tweet #{i} #elixir #benchmark @user_#{uid} lorem ipsum dolor sit amet " <>
+              "consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua",
+          "source" =>
+            "<a href=\"http://twitter.com/download/iphone\" rel=\"nofollow\">Twitter for iPhone</a>",
+          "truncated" => false,
+          "in_reply_to_status_id" => nil,
+          "in_reply_to_status_id_str" => nil,
+          "in_reply_to_user_id" => nil,
+          "in_reply_to_user_id_str" => nil,
+          "in_reply_to_screen_name" => nil,
+          "user" => %{
+            "id" => 1_000_000 + uid,
+            "id_str" => Integer.to_string(1_000_000 + uid),
+            "name" => "User Name #{uid}",
+            "screen_name" => "username_#{uid}",
+            "location" => "San Francisco, CA",
+            "description" =>
+              "Software engineer and open source contributor. Building things at the intersection of technology and creativity.",
+            "url" => nil,
+            "entities" => %{"description" => %{"urls" => []}},
+            "protected" => false,
+            "followers_count" => rem(i * 1337, 100_000),
+            "friends_count" => rem(i * 42, 5_000),
+            "listed_count" => rem(i * 7, 500),
+            "created_at" => "Mon Jan 01 00:00:00 +0000 2010",
+            "favourites_count" => rem(i * 13, 50_000),
+            "utc_offset" => nil,
+            "time_zone" => nil,
+            "geo_enabled" => false,
+            "verified" => false,
+            "statuses_count" => rem(i * 17, 10_000),
+            "lang" => "en",
+            "contributors_enabled" => false,
+            "is_translator" => false,
+            "is_translation_enabled" => false,
+            "profile_background_color" => "C0DEED",
+            "profile_background_image_url" =>
+              "http://pbs.twimg.com/profile_background_images/#{uid}/bg.png",
+            "profile_background_image_url_https" =>
+              "https://pbs.twimg.com/profile_background_images/#{uid}/bg.png",
+            "profile_background_tile" => false,
+            "profile_image_url" => "http://pbs.twimg.com/profile_images/#{uid}/photo_normal.jpeg",
+            "profile_image_url_https" =>
+              "https://pbs.twimg.com/profile_images/#{uid}/photo_normal.jpeg",
+            "profile_banner_url" => "https://pbs.twimg.com/profile_banners/#{uid}/1409318784",
+            "profile_link_color" => "0084B4",
+            "profile_sidebar_border_color" => "C0DEED",
+            "profile_sidebar_fill_color" => "DDEEF6",
+            "profile_text_color" => "333333",
+            "profile_use_background_image" => true,
+            "default_profile" => true,
+            "default_profile_image" => false,
+            "following" => false,
+            "follow_request_sent" => false,
+            "notifications" => false
+          },
+          "geo" => nil,
+          "coordinates" => nil,
+          "place" => nil,
+          "contributors" => nil,
+          "retweet_count" => rem(i * 3, 1000),
+          "favorite_count" => rem(i * 7, 2000),
+          "entities" => %{
+            "hashtags" => [
+              %{"text" => "elixir", "indices" => [15, 22]},
+              %{"text" => "benchmark", "indices" => [23, 33]}
+            ],
+            "symbols" => [],
+            "urls" => [],
+            "user_mentions" => [
+              %{
+                "screen_name" => "user_#{uid}",
+                "name" => "User #{uid}",
+                "id" => 2_000_000 + uid,
+                "id_str" => Integer.to_string(2_000_000 + uid),
+                "indices" => [34, 42]
+              }
+            ]
+          },
+          "favorited" => false,
+          "retweeted" => false,
+          "lang" => "en"
+        }
+      end),
+    "search_metadata" => %{
+      "count" => 320,
+      "completed_in" => 0.035,
+      "max_id" => 505_874_924_095_815_681,
+      "since_id" => 0,
+      "query" => "%23elixir",
+      "refresh_url" => "?since_id=505874924095815681&q=%23elixir&include_entities=1"
+    }
+  })
+
+IO.puts("JSON payload size: #{byte_size(large_json)} bytes\n")
+
+Benchee.run(
+  %{
+    "torque decode" => fn -> Torque.decode!(large_json) end,
+    "simdjsone decode" => fn -> :simdjson.decode(large_json) end,
+    "jiffy decode" => fn -> :jiffy.decode(large_json, [:return_maps]) end,
+    "jason decode" => fn -> Jason.decode!(large_json) end,
+    "otp json decode" => fn -> :json.decode(large_json) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)
+
+IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
+
+large_decoded_json = Torque.decode!(large_json)
+
+Benchee.run(
+  %{
+    "torque encode (map)" => fn -> Torque.encode!(large_decoded_json) end,
+    "torque iodata (map)" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
+    "jiffy encode (map)" => fn -> :jiffy.encode(large_decoded_json) end,
+    "jason encode (map)" => fn -> Jason.encode!(large_decoded_json) end,
+    "otp json encode (iodata)" => fn -> :json.encode(large_decoded_json) end,
+    "simdjsone encode (map)" => fn -> :simdjson.encode(large_decoded_json) end
   },
   warmup: 2,
   time: 5,
