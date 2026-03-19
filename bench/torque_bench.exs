@@ -210,18 +210,18 @@ IO.puts("\n=== ENCODE BENCHMARK ===\n")
 
 Benchee.run(
   %{
-    "torque encode (map)" => fn -> Torque.encode!(bid_response) end,
-    "torque encode (proplist)" => fn -> Torque.encode!(bid_response_proplist) end,
-    "torque iodata (map)" => fn -> Torque.encode_to_iodata(bid_response) end,
-    "torque iodata (proplist)" => fn -> Torque.encode_to_iodata(bid_response_proplist) end,
-    "jiffy encode (proplist)" => fn -> :jiffy.encode(bid_response_proplist, [:force_utf8]) end,
-    "jiffy encode (map)" => fn -> :jiffy.encode(bid_response) end,
-    "jason encode (map)" => fn -> Jason.encode!(bid_response) end,
-    "simdjsone encode (map)" => fn -> :simdjson.encode(bid_response) end,
-    "otp json encode (iodata)" => fn -> :json.encode(bid_response) end,
-    "otp json encode (binary)" => fn -> :erlang.iolist_to_binary(:json.encode(bid_response)) end,
-    "simdjsone encode (proplist)" => fn -> :simdjson.encode(bid_response_proplist) end,
-    "simdjson encode (map)" => fn -> :simdjson.encode(bid_response) end
+    "torque: map => binary" => fn -> Torque.encode!(bid_response) end,
+    "torque: proplist => binary" => fn -> Torque.encode!(bid_response_proplist) end,
+    "torque: map => iodata" => fn -> Torque.encode_to_iodata(bid_response) end,
+    "torque: proplist => iodata" => fn -> Torque.encode_to_iodata(bid_response_proplist) end,
+    "jiffy: proplist => iodata" => fn -> :jiffy.encode(bid_response_proplist, [:force_utf8]) end,
+    "jiffy: map => iodata" => fn -> :jiffy.encode(bid_response) end,
+    "jason: map => binary" => fn -> Jason.encode!(bid_response) end,
+    "jason: map => iodata" => fn -> Jason.encode_to_iodata!(bid_response) end,
+    "simdjsone: map => iodata" => fn -> :simdjson.encode(bid_response) end,
+    "simdjsone: proplist => iodata" => fn -> :simdjson.encode(bid_response_proplist) end,
+    "otp json: map => iodata" => fn -> :json.encode(bid_response) end,
+    "otp json: map => binary" => fn -> :erlang.iolist_to_binary(:json.encode(bid_response)) end
   },
   warmup: 2,
   time: 5,
@@ -365,14 +365,33 @@ IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
 
 large_decoded_json = Torque.decode!(large_json)
 
+# Convert to proplist format (binary keys) for libraries that support it
+to_proplist = fn f, v ->
+  cond do
+    is_map(v) -> {Enum.map(v, fn {k, val} -> {k, f.(f, val)} end)}
+    is_list(v) -> Enum.map(v, &f.(f, &1))
+    true -> v
+  end
+end
+
+large_decoded_proplist = to_proplist.(to_proplist, large_decoded_json)
+
 Benchee.run(
   %{
-    "torque encode (map)" => fn -> Torque.encode!(large_decoded_json) end,
-    "torque iodata (map)" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
-    "jiffy encode (map)" => fn -> :jiffy.encode(large_decoded_json) end,
-    "jason encode (map)" => fn -> Jason.encode!(large_decoded_json) end,
-    "otp json encode (iodata)" => fn -> :json.encode(large_decoded_json) end,
-    "simdjsone encode (map)" => fn -> :simdjson.encode(large_decoded_json) end
+    "torque: map => binary" => fn -> Torque.encode!(large_decoded_json) end,
+    "torque: proplist => binary" => fn -> Torque.encode!(large_decoded_proplist) end,
+    "torque: map => iodata" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
+    "torque: proplist => iodata" => fn -> Torque.encode_to_iodata(large_decoded_proplist) end,
+    "jiffy: proplist => iodata" => fn -> :jiffy.encode(large_decoded_proplist) end,
+    "jiffy: map => iodata" => fn -> :jiffy.encode(large_decoded_json) end,
+    "jason: map => binary" => fn -> Jason.encode!(large_decoded_json) end,
+    "jason: map => iodata" => fn -> Jason.encode_to_iodata!(large_decoded_json) end,
+    "simdjsone: map => iodata" => fn -> :simdjson.encode(large_decoded_json) end,
+    "simdjsone: proplist => iodata" => fn -> :simdjson.encode(large_decoded_proplist) end,
+    "otp json: map => iodata" => fn -> :json.encode(large_decoded_json) end,
+    "otp json: map => binary" => fn ->
+      :erlang.iolist_to_binary(:json.encode(large_decoded_json))
+    end
   },
   warmup: 2,
   time: 5,
