@@ -100,6 +100,8 @@ json = Torque.encode_to_iodata(%{id: "abc"})
 | `true`, `false` | `true`, `false` |
 | `null` | `nil` |
 
+For objects with duplicate keys, the last value wins.
+
 ### Elixir to JSON
 
 | Elixir | JSON |
