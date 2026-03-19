@@ -29,6 +29,7 @@ defmodule Torque.MixProject do
       {:ex_doc, "~> 0.35", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:jason, "~> 1.4"},
+      {:stream_data, "~> 1.1", only: :test},
       {:simdjsone, "~> 0.5.0", only: :bench},
       {:jiffy, "~> 1.1", only: :bench},
       {:benchee, "~> 1.3", only: :bench}

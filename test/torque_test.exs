@@ -248,6 +248,22 @@ defmodule Torque.PointerTest do
     end
   end
 
+  describe "get/3 error propagation" do
+    test "returns default for missing field" do
+      {:ok, doc} = Torque.parse(~s({"a":1}))
+      assert "default" == Torque.get(doc, "/b", "default")
+    end
+
+    test "raises ArgumentError on nesting_too_deep" do
+      json = Enum.reduce(1..513, ~s("leaf"), fn _, acc -> ~s({"x":#{acc}}) end)
+      {:ok, doc} = Torque.parse(json)
+
+      assert_raise ArgumentError, ~r/nesting_too_deep/, fn ->
+        Torque.get(doc, "", "default")
+      end
+    end
+  end
+
   describe "parse/1 errors" do
     test "invalid json" do
       assert {:error, _} = Torque.parse("{invalid}")

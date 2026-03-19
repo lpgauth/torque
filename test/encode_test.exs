@@ -52,6 +52,14 @@ defmodule Torque.EncodeTest do
       assert {:ok, "-1"} = Torque.encode(-1)
     end
 
+    test "u64 range integer (i64 max + 1)" do
+      assert {:ok, "9223372036854775808"} = Torque.encode(9_223_372_036_854_775_808)
+    end
+
+    test "u64 max" do
+      assert {:ok, "18446744073709551615"} = Torque.encode(18_446_744_073_709_551_615)
+    end
+
     test "float" do
       assert {:ok, json} = Torque.encode(3.14)
       assert_in_delta 3.14, String.to_float(json), 0.001

@@ -189,6 +189,11 @@ Run benchmarks locally:
 MIX_ENV=bench mix run bench/torque_bench.exs
 ```
 
+## Limitations
+
+- **Nesting depth**: JSON documents nested deeper than 512 levels return `{:error, :nesting_too_deep}` from `decode/1`, `get/2`, and `encode/1` rather than crashing the VM. Real-world documents are never this deep; the limit exists to prevent stack overflow in the NIF.
+- **Numeric string keys**: Object keys that are pure integers (e.g. `"0"`, `"42"`) cannot be addressed via JSON Pointer because the pointer walker treats numeric path segments as array indices. Use `decode/1` if you need to access such keys.
+
 ## License
 
 MIT

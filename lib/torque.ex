@@ -54,7 +54,8 @@ defmodule Torque do
       {:ok, "example.com"} = Torque.get(doc, "/site/domain")
       {:error, :no_such_field} = Torque.get(doc, "/missing")
   """
-  @spec get(reference(), binary()) :: {:ok, term()} | {:error, :no_such_field}
+  @spec get(reference(), binary()) ::
+          {:ok, term()} | {:error, :no_such_field | :nesting_too_deep}
   def get(doc, path) when is_reference(doc) and is_binary(path) do
     Torque.Native.get(doc, path)
   end
@@ -75,6 +76,7 @@ defmodule Torque do
     case Torque.Native.get(doc, path) do
       {:ok, value} -> value
       {:error, :no_such_field} -> default
+      {:error, reason} -> raise ArgumentError, "get error: #{reason}"
     end
   end
 
@@ -93,7 +95,8 @@ defmodule Torque do
       [{:ok, 1}, {:ok, 2}, {:error, :no_such_field}] =
         Torque.get_many(doc, ["/a", "/b", "/c"])
   """
-  @spec get_many(reference(), [binary()]) :: [{:ok, term()} | {:error, :no_such_field}]
+  @spec get_many(reference(), [binary()]) ::
+          [{:ok, term()} | {:error, :no_such_field | :nesting_too_deep}]
   def get_many(doc, paths) when is_reference(doc) and is_list(paths) do
     Torque.Native.get_many(doc, paths)
   end
@@ -141,7 +144,7 @@ defmodule Torque do
 
   Automatically uses a dirty CPU scheduler for inputs larger than 10 KB.
   """
-  @spec decode(binary()) :: {:ok, term()} | {:error, binary()}
+  @spec decode(binary()) :: {:ok, term()} | {:error, binary() | :nesting_too_deep}
   def decode(json) when is_binary(json) and byte_size(json) > @timeslice_bytes do
     Torque.Native.decode_dirty(json)
   end
@@ -176,7 +179,7 @@ defmodule Torque do
     * Other atoms (encoded as JSON strings)
     * `{keyword_list}` tuples (jiffy-style proplist objects)
   """
-  @spec encode(term()) :: {:ok, binary()} | {:error, binary()}
+  @spec encode(term()) :: {:ok, binary()} | {:error, binary() | :nesting_too_deep}
   def encode(term) do
     Torque.Native.encode(term)
   end

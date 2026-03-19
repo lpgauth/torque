@@ -1,12 +1,23 @@
 use crate::atoms;
 use crate::nif_util::make_tuple2;
-use crate::types::value_to_term;
+use crate::types::{value_to_term, MAX_DEPTH};
 use crate::ParsedDocument;
 use rustler::sys::{enif_make_list_from_array, ERL_NIF_TERM};
 use rustler::{Binary, Encoder, Env, ListIterator, ResourceArc, Term};
 use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 
 const GET_MANY_STACK: usize = 64;
+
+/// Returns the last value for `key` in an object, matching the last-value-wins
+/// behaviour of `value_to_term` / `build_map_dedup` for duplicate keys.
+#[inline]
+fn object_get_last<'v>(value: &'v sonic_rs::Value, key: &str) -> Option<&'v sonic_rs::Value> {
+    value
+        .as_object()?
+        .iter()
+        .rfind(|(k, _)| *k == key)
+        .map(|(_, v)| v)
+}
 
 #[inline]
 fn pointer_lookup<'v>(value: &'v sonic_rs::Value, path: &str) -> Option<&'v sonic_rs::Value> {
@@ -32,9 +43,9 @@ fn pointer_lookup<'v>(value: &'v sonic_rs::Value, path: &str) -> Option<&'v soni
         }
         if segment.contains('~') {
             let unescaped = segment.replace("~1", "/").replace("~0", "~");
-            current = current.get(&unescaped as &str)?;
+            current = object_get_last(current, &unescaped)?;
         } else {
-            current = current.get(segment)?;
+            current = object_get_last(current, segment)?;
         }
     }
     Some(current)
@@ -76,8 +87,12 @@ fn get<'a>(env: Env<'a>, doc: ResourceArc<ParsedDocument>, path: &str) -> Term<'
     let ok_raw = atoms::ok().as_c_arg();
     let err_raw = atoms::error().as_c_arg();
     let nsf_raw = atoms::no_such_field().as_c_arg();
+    let ntd_raw = atoms::nesting_too_deep().as_c_arg();
     match pointer_lookup(&doc.value, path) {
-        Some(value) => make_tuple2(env, ok_raw, value_to_term(env, value).as_c_arg()),
+        Some(value) => match value_to_term(env, value, MAX_DEPTH) {
+            Some(term) => make_tuple2(env, ok_raw, term.as_c_arg()),
+            None => make_tuple2(env, err_raw, ntd_raw),
+        },
         None => make_tuple2(env, err_raw, nsf_raw),
     }
 }
@@ -90,9 +105,13 @@ fn get_one_result(
     ok_raw: ERL_NIF_TERM,
     err_raw: ERL_NIF_TERM,
     nsf_raw: ERL_NIF_TERM,
+    ntd_raw: ERL_NIF_TERM,
 ) -> ERL_NIF_TERM {
     match pointer_lookup(&doc.value, path) {
-        Some(value) => make_tuple2(env, ok_raw, value_to_term(env, value).as_c_arg()).as_c_arg(),
+        Some(value) => match value_to_term(env, value, MAX_DEPTH) {
+            Some(term) => make_tuple2(env, ok_raw, term.as_c_arg()).as_c_arg(),
+            None => make_tuple2(env, err_raw, ntd_raw).as_c_arg(),
+        },
         None => make_tuple2(env, err_raw, nsf_raw).as_c_arg(),
     }
 }
@@ -106,6 +125,7 @@ fn get_many<'a>(
     let ok_raw = atoms::ok().as_c_arg();
     let err_raw = atoms::error().as_c_arg();
     let nsf_raw = atoms::no_such_field().as_c_arg();
+    let ntd_raw = atoms::nesting_too_deep().as_c_arg();
 
     // Collect into stack array when possible
     let mut stack: [ERL_NIF_TERM; GET_MANY_STACK] = [0; GET_MANY_STACK];
@@ -132,7 +152,7 @@ fn get_many<'a>(
             }
         };
 
-        let r = get_one_result(env, &doc, path, ok_raw, err_raw, nsf_raw);
+        let r = get_one_result(env, &doc, path, ok_raw, err_raw, nsf_raw, ntd_raw);
         if count < GET_MANY_STACK && heap.is_none() {
             stack[count] = r;
         } else {
@@ -177,11 +197,14 @@ fn array_length<'a>(env: Env<'a>, doc: ResourceArc<ParsedDocument>, path: &str) 
 
 fn do_decode<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
     match sonic_rs::from_slice::<sonic_rs::Value>(bytes) {
-        Ok(value) => make_tuple2(
-            env,
-            atoms::ok().as_c_arg(),
-            value_to_term(env, &value).as_c_arg(),
-        ),
+        Ok(value) => match value_to_term(env, &value, MAX_DEPTH) {
+            Some(term) => make_tuple2(env, atoms::ok().as_c_arg(), term.as_c_arg()),
+            None => make_tuple2(
+                env,
+                atoms::error().as_c_arg(),
+                atoms::nesting_too_deep().as_c_arg(),
+            ),
+        },
         Err(e) => make_tuple2(
             env,
             atoms::error().as_c_arg(),
@@ -232,7 +255,10 @@ fn get_many_nil<'a>(
         };
 
         let r = match pointer_lookup(&doc.value, path) {
-            Some(value) => value_to_term(env, value).as_c_arg(),
+            Some(value) => match value_to_term(env, value, MAX_DEPTH) {
+                Some(term) => term.as_c_arg(),
+                None => nil_raw,
+            },
             None => nil_raw,
         };
         if count < GET_MANY_STACK && heap.is_none() {
