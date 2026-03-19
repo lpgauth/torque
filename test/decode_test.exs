@@ -72,6 +72,18 @@ defmodule Torque.DecodeTest do
       assert {:ok, 9_223_372_036_854_775_808} = Torque.decode("9223372036854775808")
     end
 
+    test "duplicate keys - last value wins" do
+      assert {:ok, %{"a" => 2}} = Torque.decode(~s({"a":1,"a":2}))
+    end
+
+    test "duplicate keys in nested object - last value wins" do
+      assert {:ok, %{"x" => %{"a" => 2}}} = Torque.decode(~s({"x":{"a":1,"a":2}}))
+    end
+
+    test "duplicate keys with different value types" do
+      assert {:ok, %{"k" => "str"}} = Torque.decode(~s({"k":1,"k":true,"k":"str"}))
+    end
+
     test "invalid json returns error" do
       assert {:error, _reason} = Torque.decode("{invalid}")
     end

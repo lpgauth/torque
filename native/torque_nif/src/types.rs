@@ -1,4 +1,7 @@
-use rustler::sys::{enif_make_list_from_array, enif_make_map_from_arrays, ERL_NIF_TERM};
+use rustler::sys::{
+    enif_make_list_from_array, enif_make_map_from_arrays, enif_make_map_put, enif_make_new_map,
+    ERL_NIF_TERM,
+};
 use rustler::{Env, NewBinary, Term};
 use sonic_rs::{JsonContainerTrait, JsonType, JsonValueTrait};
 
@@ -83,14 +86,18 @@ pub fn value_to_term<'a>(env: Env<'a>, value: &sonic_rs::Value) -> Term<'a> {
                 }
                 let mut map: ERL_NIF_TERM = 0;
                 unsafe {
-                    enif_make_map_from_arrays(
+                    if enif_make_map_from_arrays(
                         env.as_c_arg(),
                         keys.as_ptr(),
                         vals.as_ptr(),
                         count,
                         &mut map,
-                    );
-                    Term::new(env, map)
+                    ) != 0
+                    {
+                        Term::new(env, map)
+                    } else {
+                        build_map_dedup(env, obj)
+                    }
                 }
             } else {
                 let mut keys: Vec<ERL_NIF_TERM> = Vec::with_capacity(count);
@@ -101,16 +108,38 @@ pub fn value_to_term<'a>(env: Env<'a>, value: &sonic_rs::Value) -> Term<'a> {
                 }
                 let mut map: ERL_NIF_TERM = 0;
                 unsafe {
-                    enif_make_map_from_arrays(
+                    if enif_make_map_from_arrays(
                         env.as_c_arg(),
                         keys.as_ptr(),
                         vals.as_ptr(),
                         count,
                         &mut map,
-                    );
-                    Term::new(env, map)
+                    ) != 0
+                    {
+                        Term::new(env, map)
+                    } else {
+                        build_map_dedup(env, obj)
+                    }
                 }
             }
         }
+    }
+}
+
+/// Fallback for objects with duplicate keys. Iterates all pairs so that the
+/// last value for each duplicate key wins, matching common JSON parser behaviour.
+/// Marked `#[cold]` so the optimiser keeps the duplicate-free fast path hot.
+#[cold]
+fn build_map_dedup<'a>(env: Env<'a>, obj: &sonic_rs::Object) -> Term<'a> {
+    unsafe {
+        let mut map = enif_make_new_map(env.as_c_arg());
+        for (k, v) in obj.iter() {
+            let key = make_binary_term(env, k).as_c_arg();
+            let val = value_to_term(env, v).as_c_arg();
+            let mut new_map: ERL_NIF_TERM = 0;
+            enif_make_map_put(env.as_c_arg(), map, key, val, &mut new_map);
+            map = new_map;
+        }
+        Term::new(env, map)
     }
 }
