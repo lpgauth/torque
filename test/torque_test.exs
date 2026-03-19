@@ -231,6 +231,23 @@ defmodule Torque.PointerTest do
     end
   end
 
+  describe "duplicate keys" do
+    test "parse + get on object with duplicate keys - last value wins" do
+      {:ok, doc} = Torque.parse(~s({"a":1,"b":2,"a":3}))
+      assert {:ok, %{"a" => 3, "b" => 2}} = Torque.get(doc, "")
+    end
+
+    test "parse + get nested object with duplicate keys" do
+      {:ok, doc} = Torque.parse(~s({"x":{"k":"first","k":"last"}}))
+      assert {:ok, %{"k" => "last"}} = Torque.get(doc, "/x")
+    end
+
+    test "parse + get_many with duplicate key object" do
+      {:ok, doc} = Torque.parse(~s({"a":1,"a":2}))
+      assert [{:ok, %{"a" => 2}}] = Torque.get_many(doc, [""])
+    end
+  end
+
   describe "parse/1 errors" do
     test "invalid json" do
       assert {:error, _} = Torque.parse("{invalid}")
