@@ -108,6 +108,5 @@ defmodule Torque.DecodeTest do
         Torque.decode!("{invalid}")
       end
     end
-
   end
 end
