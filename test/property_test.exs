@@ -613,15 +613,6 @@ defmodule Torque.PropertyTest do
       {:ok, doc2} = Torque.parse(~s({"a":[1,2,3]}))
       assert {:error, :no_such_field} = Torque.get(doc2, "/a/0/x")
     end
-
-    property "numeric string keys on objects always return no_such_field" do
-      check all(n <- integer(0..100)) do
-        json = ~s({"#{n}": "val"})
-        {:ok, doc} = Torque.parse(json)
-        # A purely numeric segment on an object (not an array) never matches
-        assert {:error, :no_such_field} = Torque.get(doc, "/#{n}")
-      end
-    end
   end
 
   # ---- get/3 raises on nesting_too_deep ----

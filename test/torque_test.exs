@@ -139,12 +139,20 @@ defmodule Torque.PointerTest do
       assert {:ok, "ten"} = Torque.get(doc, "/10")
     end
 
-    test "nested numeric string object key id reachable via JSON Pointer" do
+    test "nested numeric string object key is reachable via JSON Pointer" do
       {:ok, doc} = Torque.parse(~s({"k1":"v1","k2":{"10":"ten","n1":"nv1"}}))
       assert {:ok, "v1"} = Torque.get(doc, "/k1")
       assert {:ok, %{"10" => "ten", "n1" => "nv1"}} = Torque.get(doc, "/k2")
       assert {:ok, "ten"} = Torque.get(doc, "/k2/10")
       assert {:ok, "nv1"} = Torque.get(doc, "/k2/n1")
+    end
+
+    test "numeric segment dispatches on node type" do
+      {:ok, obj_doc} = Torque.parse(~s({"0":"from-object"}))
+      {:ok, arr_doc} = Torque.parse(~s(["from-array"]))
+
+      assert {:ok, "from-object"} = Torque.get(obj_doc, "/0")
+      assert {:ok, "from-array"} = Torque.get(arr_doc, "/0")
     end
   end
 
@@ -162,6 +170,11 @@ defmodule Torque.PointerTest do
 
     test "empty paths list", %{doc: doc} do
       assert [] = Torque.get_many(doc, [])
+    end
+
+    test "numeric string object keys" do
+      {:ok, doc} = Torque.parse(~s({"1":"one","2":"two"}))
+      assert [{:ok, "one"}, {:ok, "two"}] = Torque.get_many(doc, ["/1", "/2"])
     end
 
     test "all fields", %{doc: doc} do
