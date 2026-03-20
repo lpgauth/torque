@@ -165,6 +165,9 @@ fn encode_map_key(
                 }
                 let bin = bin.assume_init();
                 let slice = std::slice::from_raw_parts(bin.data, bin.size);
+                if std::str::from_utf8(slice).is_err() {
+                    return Err(EncodeError::BadArg);
+                }
                 escape_bytes(slice, buf);
             }
         }
@@ -215,6 +218,9 @@ fn encode_binary(
         }
         let bin = bin.assume_init();
         let slice = std::slice::from_raw_parts(bin.data, bin.size);
+        if std::str::from_utf8(slice).is_err() {
+            return Err(EncodeError::BadArg);
+        }
         buf.push(b'"');
         escape_bytes(slice, buf);
         buf.push(b'"');

@@ -100,6 +100,14 @@ defmodule Torque.EncodeTest do
       assert {:ok, json} = Torque.encode(%{status: :active})
       assert %{"status" => "active"} = Jason.decode!(json)
     end
+
+    test "invalid UTF-8 binary returns error" do
+      assert {:error, _} = Torque.encode(<<0x80>>)
+    end
+
+    test "invalid UTF-8 binary map key returns error" do
+      assert {:error, _} = Torque.encode(%{<<0x80>> => "value"})
+    end
   end
 
   describe "encode!/1" do
