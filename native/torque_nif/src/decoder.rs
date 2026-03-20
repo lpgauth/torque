@@ -35,7 +35,7 @@ fn pointer_lookup<'v>(value: &'v sonic_rs::Value, path: &str) -> Option<&'v soni
     let mut current = value;
     for segment in path[1..].split('/') {
         let seg_bytes = segment.as_bytes();
-        if !seg_bytes.is_empty() && seg_bytes[0].is_ascii_digit() {
+        if current.is_array() && !seg_bytes.is_empty() && seg_bytes[0].is_ascii_digit() {
             if let Ok(index) = segment.parse::<usize>() {
                 current = current.get(index)?;
                 continue;

@@ -6,16 +6,9 @@ defmodule Torque.PropertyTest do
 
   # ---- Generators ----
 
-  # Non-empty alphanumeric key, guaranteed to not be purely numeric.
-  # Purely numeric keys (e.g. "2") are mis-routed through array-index lookup in
-  # pointer_lookup, so they can't be reached via JSON Pointer on objects.
+  # Non-empty alphanumeric key.
   defp json_key do
-    filter(string(:alphanumeric, min_length: 1, max_length: 15), fn s ->
-      case Integer.parse(s) do
-        {_, ""} -> false
-        _ -> true
-      end
-    end)
+    string(:alphanumeric, min_length: 1, max_length: 15)
   end
 
   # Scalars that roundtrip exactly through Jason → Torque (no float precision issues)
@@ -284,6 +277,17 @@ defmodule Torque.PropertyTest do
         {:ok, doc} = Torque.parse(json)
         # A 20-30 char random key is essentially guaranteed to be absent
         assert {:error, :no_such_field} == Torque.get(doc, "/#{missing_key}")
+      end
+    end
+
+    property "get works for numeric top-level object keys" do
+      check all(
+              k <- integer(0..99_999_999) |> map(&Integer.to_string/1),
+              v <- json_scalar_exact()
+            ) do
+        json = Jason.encode!(%{k => v})
+        {:ok, doc} = Torque.parse(json)
+        assert {:ok, v} == Torque.get(doc, "/#{k}")
       end
     end
   end
@@ -608,15 +612,6 @@ defmodule Torque.PropertyTest do
 
       {:ok, doc2} = Torque.parse(~s({"a":[1,2,3]}))
       assert {:error, :no_such_field} = Torque.get(doc2, "/a/0/x")
-    end
-
-    property "numeric string keys on objects always return no_such_field" do
-      check all(n <- integer(0..100)) do
-        json = ~s({"#{n}": "val"})
-        {:ok, doc} = Torque.parse(json)
-        # A purely numeric segment on an object (not an array) never matches
-        assert {:error, :no_such_field} = Torque.get(doc, "/#{n}")
-      end
     end
   end
 
