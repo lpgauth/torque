@@ -116,6 +116,29 @@ For objects with duplicate keys, the last value wins.
 | atom | string |
 | `{keyword_list}` | object |
 
+## Errors
+
+Functions return `{:error, reason}` tuples (or raise `ArgumentError` for bang/iodata variants). Possible `reason` atoms:
+
+### Decode / Parse
+
+| Atom | Returned by | Meaning |
+|------|-------------|---------|
+| `:nesting_too_deep` | `decode/1`, `parse/1`, `get/2,3` | Document exceeds 512 nesting levels |
+
+`parse/1` and `decode/1` also return `{:error, binary}` with a message from sonic-rs for malformed JSON.
+
+### Encode
+
+| Atom | Returned by | Meaning |
+|------|-------------|---------|
+| `:unsupported_type` | `encode/1` | Term has no JSON representation (PID, reference, port, …) |
+| `:invalid_utf8` | `encode/1` | Binary string or map key is not valid UTF-8 |
+| `:invalid_key` | `encode/1` | Map key is not an atom or binary (e.g. integer key) |
+| `:malformed_proplist` | `encode/1` | `{proplist}` contains a non-`{key, value}` element |
+| `:non_finite_float` | `encode/1` | Float is infinity or NaN (unreachable from normal BEAM code) |
+| `:nesting_too_deep` | `encode/1` | Term exceeds 512 nesting levels |
+
 ## Benchmarks
 
 Apple M2 Pro, OTP 28, Elixir 1.19:

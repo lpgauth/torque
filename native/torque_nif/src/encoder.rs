@@ -16,6 +16,7 @@ enum EncodeError {
     InvalidKey,
     MalformedProplist,
     DepthExceeded,
+    InvalidUtf8,
 }
 
 /// Read an atom's name into a stack buffer without heap allocation.
@@ -67,6 +68,7 @@ fn encode<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
                 EncodeError::NonFiniteFloat => atoms::non_finite_float().as_c_arg(),
                 EncodeError::InvalidKey => atoms::invalid_key().as_c_arg(),
                 EncodeError::MalformedProplist => atoms::malformed_proplist().as_c_arg(),
+                EncodeError::InvalidUtf8 => atoms::invalid_utf8().as_c_arg(),
             };
             make_tuple2(env, atoms::error().as_c_arg(), reason)
         }
@@ -92,6 +94,7 @@ fn encode_iodata<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
                 EncodeError::NonFiniteFloat => atoms::non_finite_float().as_c_arg(),
                 EncodeError::InvalidKey => atoms::invalid_key().as_c_arg(),
                 EncodeError::MalformedProplist => atoms::malformed_proplist().as_c_arg(),
+                EncodeError::InvalidUtf8 => atoms::invalid_utf8().as_c_arg(),
             };
             Term::new(env, rustler::sys::enif_raise_exception(env_raw, reason))
         },
@@ -165,6 +168,9 @@ fn encode_map_key(
                 }
                 let bin = bin.assume_init();
                 let slice = std::slice::from_raw_parts(bin.data, bin.size);
+                if std::str::from_utf8(slice).is_err() {
+                    return Err(EncodeError::InvalidUtf8);
+                }
                 escape_bytes(slice, buf);
             }
         }
@@ -215,6 +221,9 @@ fn encode_binary(
         }
         let bin = bin.assume_init();
         let slice = std::slice::from_raw_parts(bin.data, bin.size);
+        if std::str::from_utf8(slice).is_err() {
+            return Err(EncodeError::InvalidUtf8);
+        }
         buf.push(b'"');
         escape_bytes(slice, buf);
         buf.push(b'"');

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 TORQUE_BUILD=true mix deps.get     # fetch deps + force local Rust build
 TORQUE_BUILD=true mix compile      # build (includes Rust NIF compilation)
 TORQUE_BUILD=true mix test         # run all tests
-mix test test/torque_test.exs:42   # run single test by line number
+mix test test/pointer_test.exs:42  # run single test by line number
 mix compile --warnings-as-errors   # build with strict warnings
 mix format                         # format Elixir code
 mix format --check-formatted       # check Elixir formatting
@@ -67,4 +67,4 @@ Inputs larger than 10 KB are automatically dispatched to dirty CPU schedulers to
 - `native/torque_nif/src/decoder.rs` — parse, get, get_many, decode NIFs
 - `native/torque_nif/src/encoder.rs` — direct term-walking JSON encoder
 - `native/torque_nif/src/types.rs` — sonic_rs Value → Erlang term conversion
-- `native/torque_nif/src/atoms.rs` — cached atoms (ok, error, no_such_field, nil)
+- `native/torque_nif/src/atoms.rs` — cached atoms (ok, error, nil, no_such_field, nesting_too_deep, unsupported_type, non_finite_float, invalid_key, malformed_proplist, invalid_utf8)

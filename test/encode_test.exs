@@ -96,9 +96,17 @@ defmodule Torque.EncodeTest do
       assert [%{"id" => 1}, %{"id" => 2}] = Jason.decode!(json)
     end
 
-    test "atom values encoded as strings" do
+    test "atom map values encoded as strings" do
       assert {:ok, json} = Torque.encode(%{status: :active})
       assert %{"status" => "active"} = Jason.decode!(json)
+    end
+
+    test "invalid UTF-8 binary returns error" do
+      assert {:error, :invalid_utf8} = Torque.encode(<<0x80>>)
+    end
+
+    test "invalid UTF-8 binary map key returns error" do
+      assert {:error, :invalid_utf8} = Torque.encode(%{<<0x80>> => "value"})
     end
   end
 
@@ -108,8 +116,14 @@ defmodule Torque.EncodeTest do
     end
 
     test "unsupported term raises" do
-      assert_raise ArgumentError, fn ->
+      assert_raise ArgumentError, ~r/unsupported_type/, fn ->
         Torque.encode!(self())
+      end
+    end
+
+    test "invalid UTF-8 binary raises" do
+      assert_raise ArgumentError, ~r/invalid_utf8/, fn ->
+        Torque.encode!(<<0x80>>)
       end
     end
   end
@@ -126,8 +140,14 @@ defmodule Torque.EncodeTest do
     end
 
     test "unsupported term raises ArgumentError" do
-      assert_raise ArgumentError, fn ->
+      assert_raise ArgumentError, ~r/unsupported_type/, fn ->
         Torque.encode_to_iodata(self())
+      end
+    end
+
+    test "invalid UTF-8 binary raises ArgumentError" do
+      assert_raise ArgumentError, ~r/invalid_utf8/, fn ->
+        Torque.encode_to_iodata(<<0x80>>)
       end
     end
   end

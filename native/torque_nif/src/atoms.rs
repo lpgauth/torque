@@ -12,4 +12,5 @@ rustler::atoms! {
     non_finite_float,
     invalid_key,
     malformed_proplist,
+    invalid_utf8,
 }

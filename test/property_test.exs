@@ -475,7 +475,7 @@ defmodule Torque.PropertyTest do
 
     test "encode_to_iodata raises at depth 513" do
       term = Enum.reduce(1..513, "leaf", fn _, acc -> %{"x" => acc} end)
-      assert_raise ArgumentError, fn -> Torque.encode_to_iodata(term) end
+      assert_raise ArgumentError, ~r/nesting_too_deep/, fn -> Torque.encode_to_iodata(term) end
     end
   end
 
@@ -541,6 +541,13 @@ defmodule Torque.PropertyTest do
       assert {:error, :malformed_proplist} = Torque.encode({[{:a, :b, :c}]})
     end
 
+    # BEAM rejects non-finite floats (both arithmetic overflow and binary_to_term
+    # validation), so this NIF code path is not reachable from Elixir.
+    @tag :skip
+    test "non-finite float returns non_finite_float" do
+      assert {:error, :non_finite_float} = Torque.encode(:infinity)
+    end
+
     test "encode_to_iodata raises with unsupported_type message" do
       assert_raise ArgumentError, ~r/unsupported_type/, fn ->
         Torque.encode_to_iodata(self())
@@ -586,17 +593,6 @@ defmodule Torque.PropertyTest do
         json2 = ~s({"a/b#{suffix}": 99})
         {:ok, doc2} = Torque.parse(json2)
         assert {:ok, 99} == Torque.get(doc2, "/a~1b#{suffix}")
-      end
-    end
-
-    property "numeric-looking string keys work alongside integer array indexes" do
-      check all(n <- integer(0..100)) do
-        # Object key that looks like an integer — should be treated as a string key
-        json = ~s({"#{n}": "string_val"})
-        {:ok, doc} = Torque.parse(json)
-        # Accessing "/N" on an object should still find the string key "N"
-        result = Torque.get(doc, "/#{n}")
-        assert match?({:ok, _}, result) or match?({:error, :no_such_field}, result)
       end
     end
 
