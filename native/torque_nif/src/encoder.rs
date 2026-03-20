@@ -6,12 +6,15 @@ use rustler::sys::{
     enif_get_list_cell, enif_get_tuple, enif_get_uint64, enif_inspect_binary, ErlNifBinary,
     ErlNifCharEncoding, ErlNifEnv, ERL_NIF_TERM,
 };
-use rustler::{Encoder, Env, MapIterator, NewBinary, Term, TermType};
+use rustler::{Env, MapIterator, NewBinary, Term, TermType};
 use std::mem::MaybeUninit;
 
 #[derive(Debug)]
 enum EncodeError {
-    BadArg,
+    UnsupportedType,
+    NonFiniteFloat,
+    InvalidKey,
+    MalformedProplist,
     DepthExceeded,
 }
 
@@ -30,11 +33,11 @@ unsafe fn atom_to_stack_buf(
         ErlNifCharEncoding::ERL_NIF_LATIN1,
     ) == 0
     {
-        return Err(EncodeError::BadArg);
+        return Err(EncodeError::UnsupportedType);
     }
     let alen = (len + 1) as usize;
     if alen > 256 {
-        return Err(EncodeError::BadArg);
+        return Err(EncodeError::UnsupportedType);
     }
     enif_get_atom(
         env_raw,
@@ -57,16 +60,16 @@ fn encode<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
             let bin_term: Term = binary.into();
             make_tuple2(env, atoms::ok().as_c_arg(), bin_term.as_c_arg())
         }
-        Err(EncodeError::DepthExceeded) => make_tuple2(
-            env,
-            atoms::error().as_c_arg(),
-            atoms::nesting_too_deep().as_c_arg(),
-        ),
-        Err(EncodeError::BadArg) => make_tuple2(
-            env,
-            atoms::error().as_c_arg(),
-            "encode error".encode(env).as_c_arg(),
-        ),
+        Err(e) => {
+            let reason = match e {
+                EncodeError::DepthExceeded => atoms::nesting_too_deep().as_c_arg(),
+                EncodeError::UnsupportedType => atoms::unsupported_type().as_c_arg(),
+                EncodeError::NonFiniteFloat => atoms::non_finite_float().as_c_arg(),
+                EncodeError::InvalidKey => atoms::invalid_key().as_c_arg(),
+                EncodeError::MalformedProplist => atoms::malformed_proplist().as_c_arg(),
+            };
+            make_tuple2(env, atoms::error().as_c_arg(), reason)
+        }
     }
 }
 
@@ -85,7 +88,10 @@ fn encode_iodata<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
         Err(e) => unsafe {
             let reason = match e {
                 EncodeError::DepthExceeded => atoms::nesting_too_deep().as_c_arg(),
-                EncodeError::BadArg => "encode error".encode(env).as_c_arg(),
+                EncodeError::UnsupportedType => atoms::unsupported_type().as_c_arg(),
+                EncodeError::NonFiniteFloat => atoms::non_finite_float().as_c_arg(),
+                EncodeError::InvalidKey => atoms::invalid_key().as_c_arg(),
+                EncodeError::MalformedProplist => atoms::malformed_proplist().as_c_arg(),
             };
             Term::new(env, rustler::sys::enif_raise_exception(env_raw, reason))
         },
@@ -108,7 +114,7 @@ fn encode_term(
         TermType::Float => encode_float(env_raw, term, buf),
         TermType::Atom => encode_atom(env_raw, term, buf),
         TermType::Tuple => encode_tuple(env, env_raw, term, buf, depth),
-        _ => Err(EncodeError::BadArg),
+        _ => Err(EncodeError::UnsupportedType),
     }
 }
 
@@ -122,7 +128,7 @@ fn encode_map(
     if depth == 0 {
         return Err(EncodeError::DepthExceeded);
     }
-    let iter = MapIterator::new(term).ok_or(EncodeError::BadArg)?;
+    let iter = MapIterator::new(term).ok_or(EncodeError::UnsupportedType)?;
     buf.push(b'{');
     let mut first = true;
     for (key, value) in iter {
@@ -155,14 +161,14 @@ fn encode_map_key(
             let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
             unsafe {
                 if enif_inspect_binary(env_raw, key.as_c_arg(), bin.as_mut_ptr()) == 0 {
-                    return Err(EncodeError::BadArg);
+                    return Err(EncodeError::InvalidKey);
                 }
                 let bin = bin.assume_init();
                 let slice = std::slice::from_raw_parts(bin.data, bin.size);
                 escape_bytes(slice, buf);
             }
         }
-        _ => return Err(EncodeError::BadArg),
+        _ => return Err(EncodeError::InvalidKey),
     }
     buf.push(b'"');
     Ok(())
@@ -205,7 +211,7 @@ fn encode_binary(
     let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
     unsafe {
         if enif_inspect_binary(env_raw, term.as_c_arg(), bin.as_mut_ptr()) == 0 {
-            return Err(EncodeError::BadArg);
+            return Err(EncodeError::UnsupportedType);
         }
         let bin = bin.assume_init();
         let slice = std::slice::from_raw_parts(bin.data, bin.size);
@@ -235,18 +241,18 @@ fn encode_integer(
         buf.extend_from_slice(itoa_buf.format(u).as_bytes());
         return Ok(());
     }
-    Err(EncodeError::BadArg)
+    Err(EncodeError::UnsupportedType)
 }
 
 #[inline]
 fn encode_float(env_raw: *mut ErlNifEnv, term: Term, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
     let mut n: f64 = 0.0;
     if unsafe { enif_get_double(env_raw, term.as_c_arg(), &mut n) } == 0 {
-        return Err(EncodeError::BadArg);
+        return Err(EncodeError::UnsupportedType);
     }
     // ryu panics on non-finite floats; JSON has no representation for them
     if !n.is_finite() {
-        return Err(EncodeError::BadArg);
+        return Err(EncodeError::NonFiniteFloat);
     }
     let mut ryu_buf = ryu::Buffer::new();
     buf.extend_from_slice(ryu_buf.format(n).as_bytes());
@@ -281,7 +287,7 @@ unsafe fn get_tuple_raw<'a>(
     let mut arity: c_int = 0;
     let mut array_ptr = MaybeUninit::uninit();
     if enif_get_tuple(env_raw, term.as_c_arg(), &mut arity, array_ptr.as_mut_ptr()) != 1 {
-        return Err(EncodeError::BadArg);
+        return Err(EncodeError::UnsupportedType);
     }
     Ok(std::slice::from_raw_parts(
         array_ptr.assume_init(),
@@ -303,7 +309,7 @@ fn encode_tuple(
             return encode_proplist(env, env_raw, inner, buf, depth);
         }
     }
-    Err(EncodeError::BadArg)
+    Err(EncodeError::UnsupportedType)
 }
 
 fn encode_proplist(
@@ -324,10 +330,10 @@ fn encode_proplist(
     while unsafe { enif_get_list_cell(env_raw, current, &mut head, &mut tail) } != 0 {
         let pair = unsafe {
             let pair_term = Term::new(env, head);
-            get_tuple_raw(env_raw, pair_term)?
+            get_tuple_raw(env_raw, pair_term).map_err(|_| EncodeError::MalformedProplist)?
         };
         if pair.len() != 2 {
-            return Err(EncodeError::BadArg);
+            return Err(EncodeError::MalformedProplist);
         }
         if !first {
             buf.push(b',');

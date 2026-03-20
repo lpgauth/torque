@@ -475,6 +475,99 @@ defmodule Torque.PropertyTest do
     end
   end
 
+  # ---- Decode: arbitrary binary input safety ----
+
+  describe "decode: arbitrary binary input safety" do
+    property "decode/1 never raises on arbitrary binary input" do
+      check all(bin <- binary()) do
+        result = Torque.decode(bin)
+        assert match?({:ok, _}, result) or match?({:error, _}, result)
+      end
+    end
+  end
+
+  # ---- Decode: specific invalid JSON forms ----
+
+  describe "decode: specific invalid JSON forms" do
+    test "trailing content is rejected" do
+      assert match?({:error, _}, Torque.decode("42 extra"))
+      assert match?({:error, _}, Torque.decode(~s({"a":1} trailing)))
+    end
+
+    test "whitespace-only input is rejected" do
+      assert match?({:error, _}, Torque.decode("   "))
+      assert match?({:error, _}, Torque.decode("\n\t"))
+    end
+
+    test "NaN and Infinity literals are rejected" do
+      assert match?({:error, _}, Torque.decode("NaN"))
+      assert match?({:error, _}, Torque.decode("Infinity"))
+      assert match?({:error, _}, Torque.decode("-Infinity"))
+    end
+
+    test "empty binary is rejected" do
+      assert match?({:error, _}, Torque.decode(""))
+    end
+  end
+
+  # ---- Encode: specific error atoms ----
+
+  describe "encode: specific error atoms" do
+    test "PID returns unsupported_type" do
+      assert {:error, :unsupported_type} = Torque.encode(self())
+    end
+
+    test "reference returns unsupported_type" do
+      assert {:error, :unsupported_type} = Torque.encode(make_ref())
+    end
+
+    test "tuple with non-list returns unsupported_type" do
+      assert {:error, :unsupported_type} = Torque.encode({"not_a_list"})
+    end
+
+    test "integer map key returns invalid_key" do
+      assert {:error, :invalid_key} = Torque.encode(%{42 => "v"})
+    end
+
+    test "proplist item not a tuple returns malformed_proplist" do
+      assert {:error, :malformed_proplist} = Torque.encode({[:atom_only]})
+    end
+
+    test "proplist item is 3-tuple returns malformed_proplist" do
+      assert {:error, :malformed_proplist} = Torque.encode({[{:a, :b, :c}]})
+    end
+
+    test "encode_to_iodata raises with unsupported_type message" do
+      assert_raise ArgumentError, ~r/unsupported_type/, fn ->
+        Torque.encode_to_iodata(self())
+      end
+    end
+  end
+
+  # ---- Encode: empty proplist ----
+
+  describe "encode: empty proplist" do
+    test "{[]} encodes to {}" do
+      assert {:ok, "{}"} = Torque.encode({[]})
+    end
+  end
+
+  # ---- Encode: string control character roundtrip ----
+
+  describe "encode: string control characters roundtrip" do
+    property "strings with control characters encode and decode back to original" do
+      check all(
+              prefix <- string(:alphanumeric, max_length: 10),
+              ctrl_byte <- integer(0..0x1F),
+              suffix <- string(:alphanumeric, max_length: 10)
+            ) do
+        original = prefix <> <<ctrl_byte>> <> suffix
+        assert {:ok, json} = Torque.encode(original)
+        assert {:ok, ^original} = Torque.decode(json)
+      end
+    end
+  end
+
   # ---- JSON Pointer edge cases ----
 
   describe "JSON Pointer edge cases" do
@@ -500,6 +593,42 @@ defmodule Torque.PropertyTest do
         # Accessing "/N" on an object should still find the string key "N"
         result = Torque.get(doc, "/#{n}")
         assert match?({:ok, _}, result) or match?({:error, :no_such_field}, result)
+      end
+    end
+
+    test "path without leading slash returns no_such_field" do
+      {:ok, doc} = Torque.parse(~s({"a":1}))
+      assert {:error, :no_such_field} = Torque.get(doc, "a")
+      assert {:error, :no_such_field} = Torque.get(doc, "a/b")
+    end
+
+    test "path through a scalar intermediate returns no_such_field" do
+      {:ok, doc1} = Torque.parse(~s({"a":42}))
+      assert {:error, :no_such_field} = Torque.get(doc1, "/a/b")
+
+      {:ok, doc2} = Torque.parse(~s({"a":[1,2,3]}))
+      assert {:error, :no_such_field} = Torque.get(doc2, "/a/0/x")
+    end
+
+    property "numeric string keys on objects always return no_such_field" do
+      check all(n <- integer(0..100)) do
+        json = ~s({"#{n}": "val"})
+        {:ok, doc} = Torque.parse(json)
+        # A purely numeric segment on an object (not an array) never matches
+        assert {:error, :no_such_field} = Torque.get(doc, "/#{n}")
+      end
+    end
+  end
+
+  # ---- get/3 raises on nesting_too_deep ----
+
+  describe "get/3 raises on nesting_too_deep" do
+    test "513-deep parse + get with default raises ArgumentError" do
+      json = Enum.reduce(1..513, ~s("leaf"), fn _, acc -> ~s({"x":#{acc}}) end)
+      {:ok, doc} = Torque.parse(json)
+
+      assert_raise ArgumentError, ~r/get error: nesting_too_deep/, fn ->
+        Torque.get(doc, "", :default)
       end
     end
   end
