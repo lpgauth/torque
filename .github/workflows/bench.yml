@@ -1,0 +1,74 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  deployments: write
+
+env:
+  MIX_ENV: bench
+  TORQUE_BUILD: true
+
+jobs:
+  benchmark:
+    name: Run benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.18"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Mix deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: bench-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: bench-mix-
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v0-bench
+          shared-key: x86_64-unknown-linux-gnu
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Run benchmarks
+        run: mix run bench/torque_bench.exs
+        env:
+          BENCH_OUTPUT: json
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Torque Benchmarks
+          tool: customBiggerIsBetter
+          output-file-path: bench_results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          benchmark-data-dir-path: dev/bench
+          comment-on-alert: true
+          alert-threshold: "130%"
+          fail-on-alert: false
+
+      - name: Upload raw results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench_results.json
+          retention-days: 90
