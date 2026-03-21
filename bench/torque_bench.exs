@@ -1,6 +1,37 @@
 # Benchmark: Torque vs simdjsone, jiffy, Jason, OTP JSON
 #
 # Run with: MIX_ENV=bench mix run bench/torque_bench.exs
+# CI JSON output: BENCH_OUTPUT=json MIX_ENV=bench mix run bench/torque_bench.exs
+
+# CI formatter for github-action-benchmark (customBiggerIsBetter)
+if System.get_env("BENCH_OUTPUT") == "json" do
+  defmodule CIFormatter do
+    @behaviour Benchee.Formatter
+
+    @impl true
+    def format(suite, _opts) do
+      Enum.map(suite.scenarios, fn scenario ->
+        %{
+          "name" => scenario.name,
+          "unit" => "iterations/s",
+          "value" => scenario.run_time_data.statistics.ips
+        }
+      end)
+    end
+
+    @impl true
+    def write(entries, _opts) do
+      Agent.update(:bench_results, &(&1 ++ entries))
+    end
+  end
+
+  Agent.start_link(fn -> [] end, name: :bench_results)
+end
+
+ci_formatters =
+  if System.get_env("BENCH_OUTPUT") == "json",
+    do: [{CIFormatter, []}],
+    else: []
 
 # Sample JSON payload (~1.3KB)
 sample_json =
@@ -170,9 +201,10 @@ Benchee.run(
   time: 5,
   memory_time: 2,
   percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
 )
 
 IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
@@ -200,9 +232,10 @@ Benchee.run(
   time: 5,
   memory_time: 2,
   percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
 )
 
 IO.puts("\n=== ENCODE BENCHMARK ===\n")
@@ -226,9 +259,10 @@ Benchee.run(
   time: 5,
   memory_time: 2,
   percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
 )
 
 IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
@@ -355,9 +389,10 @@ Benchee.run(
   time: 5,
   memory_time: 2,
   percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
 )
 
 IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
@@ -396,7 +431,15 @@ Benchee.run(
   time: 5,
   memory_time: 2,
   percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
 )
+
+# Write accumulated CI results to JSON
+if System.get_env("BENCH_OUTPUT") == "json" do
+  results = Agent.get(:bench_results, & &1)
+  File.write!("bench_results.json", Jason.encode!(results))
+  IO.puts("\nWrote #{length(results)} benchmark results to bench_results.json")
+end
