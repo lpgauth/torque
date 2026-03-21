@@ -45,6 +45,9 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
+      - name: Fix simdjsone Makefile priv dir bug
+        run: sed -i 's|$(BASEDIR)/priv|$(PRIV_DIR)|g' deps/simdjsone/c_src/Makefile
+
       - name: Compile
         run: mix compile
 
