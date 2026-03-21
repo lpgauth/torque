@@ -143,7 +143,7 @@ Functions return `{:error, reason}` tuples (or raise `ArgumentError` for bang/io
 
 Apple M2 Pro, OTP 28, Elixir 1.19:
 
-### Decode (1.2 KB)
+### Decode (1.2 KB JSON)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
@@ -153,16 +153,17 @@ Apple M2 Pro, OTP 28, Elixir 1.19:
 | otp json | 130.9K | 7.64 μs | 7.21 μs | 15.17 μs | 7.73 KB |
 | jason | 107.1K | 9.34 μs | 8.54 μs | 20.92 μs | 9.54 KB |
 
-### Parse + Get
+### Decode (750 KB JSON)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| torque parse+get_many_nil | **196.5K** | **5.09 μs** | **4.46 μs** | **10.79 μs** | 1.59 KB |
-| torque parse+get_many | 190.3K | 5.26 μs | 4.54 μs | 10.88 μs | **1.58 KB** |
-| torque parse+get | 155.6K | 6.43 μs | 5.75 μs | 14.29 μs | 2.80 KB |
-| simdjsone parse+get | 125.2K | 7.99 μs | 5.83 μs | 30.83 μs | 2.28 KB |
+| torque | **525.2** | **1.90 ms** | **1.58 ms** | **2.85 ms** | **1.56 KB** |
+| simdjsone | 462.7 | 2.16 ms | 1.82 ms | 3.18 ms | **1.56 KB** |
+| otp json | 198.6 | 5.04 ms | 5.08 ms | 5.87 ms | 2.49 MB |
+| jason | 145.3 | 6.88 ms | 6.88 ms | 7.28 ms | 3.55 MB |
+| jiffy | 109.0 | 9.17 ms | 9.35 ms | 10.05 ms | 5.53 MB |
 
-### Encode (1.2 KB)
+### Encode (1.2 KB JSON)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
@@ -179,17 +180,7 @@ Apple M2 Pro, OTP 28, Elixir 1.19:
 | jason: map => binary | 390.7K | 2.56 μs | 2.33 μs | 6.13 μs | 3912 B |
 | simdjsone: map => iodata | 384.0K | 2.60 μs | 2.38 μs | 5.50 μs | 888 B |
 
-### Decode (750 KB)
-
-| Library | ips | mean | median | p99 | memory |
-|---|---|---|---|---|---|
-| torque | **525.2** | **1.90 ms** | **1.58 ms** | **2.85 ms** | **1.56 KB** |
-| simdjsone | 462.7 | 2.16 ms | 1.82 ms | 3.18 ms | **1.56 KB** |
-| otp json | 198.6 | 5.04 ms | 5.08 ms | 5.87 ms | 2.49 MB |
-| jason | 145.3 | 6.88 ms | 6.88 ms | 7.28 ms | 3.55 MB |
-| jiffy | 109.0 | 9.17 ms | 9.35 ms | 10.05 ms | 5.53 MB |
-
-### Encode (750 KB)
+### Encode (750 KB JSON)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
@@ -205,6 +196,15 @@ Apple M2 Pro, OTP 28, Elixir 1.19:
 | simdjsone: map => iodata | 219.5 | 4.55 ms | 4.31 ms | 5.55 ms | 1.06 MB |
 | jason: map => iodata | 209.3 | 4.78 ms | 4.77 ms | 5.60 ms | 4.96 MB |
 | jason: map => binary | 151.7 | 6.59 ms | 6.57 ms | 7.73 ms | 4.96 MB |
+
+### Parse + Get (1.2 KB JSON)
+
+| Library | ips | mean | median | p99 | memory |
+|---|---|---|---|---|---|
+| torque parse+get_many_nil | **196.5K** | **5.09 μs** | **4.46 μs** | **10.79 μs** | 1.59 KB |
+| torque parse+get_many | 190.3K | 5.26 μs | 4.54 μs | 10.88 μs | **1.58 KB** |
+| torque parse+get | 155.6K | 6.43 μs | 5.75 μs | 14.29 μs | 2.80 KB |
+| simdjsone parse+get | 125.2K | 7.99 μs | 5.83 μs | 30.83 μs | 2.28 KB |
 
 Run benchmarks locally:
 
