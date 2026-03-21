@@ -1,6 +1,7 @@
 mod atoms;
 mod decoder;
 mod encoder;
+mod escape;
 pub(crate) mod nif_util;
 mod types;
 

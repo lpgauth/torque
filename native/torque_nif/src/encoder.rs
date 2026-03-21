@@ -158,7 +158,7 @@ fn encode_map_key(
         TermType::Atom => {
             let mut atom_buf = [0u8; 256];
             let name = unsafe { atom_to_stack_buf(env_raw, key.as_c_arg(), &mut atom_buf)? };
-            escape_bytes(name, buf);
+            crate::escape::escape_to_vec(name, buf);
         }
         TermType::Binary => {
             let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
@@ -168,10 +168,8 @@ fn encode_map_key(
                 }
                 let bin = bin.assume_init();
                 let slice = std::slice::from_raw_parts(bin.data, bin.size);
-                if std::str::from_utf8(slice).is_err() {
-                    return Err(EncodeError::InvalidUtf8);
-                }
-                escape_bytes(slice, buf);
+                crate::escape::validate_and_escape_to_vec(slice, buf)
+                    .map_err(|_| EncodeError::InvalidUtf8)?;
             }
         }
         _ => return Err(EncodeError::InvalidKey),
@@ -221,11 +219,9 @@ fn encode_binary(
         }
         let bin = bin.assume_init();
         let slice = std::slice::from_raw_parts(bin.data, bin.size);
-        if std::str::from_utf8(slice).is_err() {
-            return Err(EncodeError::InvalidUtf8);
-        }
         buf.push(b'"');
-        escape_bytes(slice, buf);
+        crate::escape::validate_and_escape_to_vec(slice, buf)
+            .map_err(|_| EncodeError::InvalidUtf8)?;
         buf.push(b'"');
     }
     Ok(())
@@ -281,7 +277,7 @@ fn encode_atom(env_raw: *mut ErlNifEnv, term: Term, buf: &mut Vec<u8>) -> Result
         let mut atom_buf = [0u8; 256];
         let name = unsafe { atom_to_stack_buf(env_raw, raw, &mut atom_buf)? };
         buf.push(b'"');
-        escape_bytes(name, buf);
+        crate::escape::escape_to_vec(name, buf);
         buf.push(b'"');
     }
     Ok(())
@@ -358,45 +354,3 @@ fn encode_proplist(
     buf.push(b'}');
     Ok(())
 }
-
-#[inline]
-fn escape_bytes(bytes: &[u8], buf: &mut Vec<u8>) {
-    let len = bytes.len();
-    let mut start = 0;
-
-    for i in 0..len {
-        let b = bytes[i];
-        let escape = match b {
-            b'"' => b"\\\"" as &[u8],
-            b'\\' => b"\\\\",
-            b'\n' => b"\\n",
-            b'\r' => b"\\r",
-            b'\t' => b"\\t",
-            0x08 => b"\\b",
-            0x0C => b"\\f",
-            b if b < 0x20 => {
-                if start < i {
-                    buf.extend_from_slice(&bytes[start..i]);
-                }
-                buf.extend_from_slice(b"\\u00");
-                buf.push(HEX_DIGITS[(b >> 4) as usize]);
-                buf.push(HEX_DIGITS[(b & 0x0F) as usize]);
-                start = i + 1;
-                continue;
-            }
-            _ => {
-                continue;
-            }
-        };
-        if start < i {
-            buf.extend_from_slice(&bytes[start..i]);
-        }
-        buf.extend_from_slice(escape);
-        start = i + 1;
-    }
-    if start < len {
-        buf.extend_from_slice(&bytes[start..len]);
-    }
-}
-
-const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
