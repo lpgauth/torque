@@ -7,7 +7,7 @@ use sonic_rs::{JsonContainerTrait, JsonType, JsonValueTrait};
 
 use crate::atoms;
 
-const STACK_SIZE: usize = 32;
+const STACK_SIZE: usize = 64;
 
 /// Maximum JSON nesting depth accepted by `value_to_term`. Inputs nested deeper
 /// than this return `{:error, :nesting_too_deep}` rather than crashing the VM.

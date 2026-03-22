@@ -20,7 +20,7 @@ use std::fmt;
 use crate::atoms;
 use crate::nif_util::make_tuple2;
 
-const STACK_SIZE: usize = 32;
+const STACK_SIZE: usize = 64;
 const MAX_DEPTH: u32 = 512;
 
 /// Input buffer info for sub-binary creation. All fields are Copy.
