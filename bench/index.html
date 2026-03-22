@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Torque Benchmarks</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #24292f;
+      background: #f6f8fa;
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem 1rem;
+    }
+    h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
+    .subtitle { color: #57606a; margin-bottom: 2rem; font-size: 0.875rem; }
+    .subtitle a { color: #0969da; text-decoration: none; }
+    .subtitle a:hover { text-decoration: underline; }
+    h2 {
+      font-size: 1.25rem;
+      margin: 2.5rem 0 1rem;
+      border-bottom: 1px solid #d0d7de;
+      padding-bottom: 0.5rem;
+    }
+    .section-desc {
+      color: #57606a;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+    }
+    .card {
+      background: white;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      margin-bottom: 1.25rem;
+      overflow: hidden;
+    }
+    .card-header {
+      background: #f6f8fa;
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid #d0d7de;
+      font-weight: 600;
+      font-size: 0.875rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+    }
+    th {
+      text-align: left;
+      padding: 0.4rem 1rem;
+      border-bottom: 1px solid #d0d7de;
+      font-weight: 600;
+      color: #57606a;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    th.num { text-align: right; }
+    td {
+      padding: 0.4rem 1rem;
+      border-bottom: 1px solid #eaeef2;
+    }
+    td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr.torque td { background: #ddf4ff; font-weight: 500; }
+    .bar-cell { width: 35%; }
+    .bar {
+      height: 18px;
+      border-radius: 3px;
+      min-width: 2px;
+    }
+    .bar-torque { background: #0969da; }
+    .bar-other { background: #c8d1d9; }
+    .chart-card {
+      background: white;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      padding: 1rem 1rem 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .chart-title {
+      font-weight: 600;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+    }
+    .empty {
+      text-align: center;
+      padding: 2rem;
+      color: #57606a;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Torque Benchmarks</h1>
+    <p class="subtitle" id="meta">
+      <a href="https://github.com/lpgauth/torque">github.com/lpgauth/torque</a>
+    </p>
+
+    <h2>Library Comparison</h2>
+    <p class="section-desc">Latest CI results — all libraries, sorted by throughput (higher is better).</p>
+    <div id="comparison"><div class="empty">Loading...</div></div>
+
+    <h2>Performance Over Time</h2>
+    <p class="section-desc">Torque-only metrics tracked across commits to detect regressions.</p>
+    <div id="trends"><div class="empty">Loading...</div></div>
+  </div>
+
+  <script>
+    // ── helpers ──────────────────────────────────────────────────────────
+    function formatIps(v) {
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+      return v.toFixed(1);
+    }
+
+    function classifyMetric(name) {
+      var m = name.match(/^(.+?)\s*\((.+)\)$/);
+      if (!m) return { type: name, payload: '', variant: name };
+      var op = m[1].trim(), payload = m[2].trim();
+      if (op === 'decode') return { type: 'Decode', payload: payload, variant: op };
+      if (op.lastIndexOf('parse+get', 0) === 0) return { type: 'Parse+Get', payload: payload, variant: op };
+      if (op.lastIndexOf('encode', 0) === 0) return { type: 'Encode', payload: payload, variant: op.replace('encode ', '') };
+      return { type: op, payload: payload, variant: op };
+    }
+
+    // ── comparison tables ───────────────────────────────────────────────
+    function renderComparison(data) {
+      var container = document.getElementById('comparison');
+
+      var metaEl = document.getElementById('meta');
+      metaEl.innerHTML =
+        '<a href="https://github.com/lpgauth/torque">github.com/lpgauth/torque</a>' +
+        ' &mdash; last run: ' +
+        '<a href="https://github.com/lpgauth/torque/commit/' + data.commit + '">' +
+        data.commit + '</a>' +
+        ' (' + new Date(data.date).toLocaleDateString() + ')';
+
+      // group by benchmark group, preserving order
+      var groups = {}, order = [];
+      data.results.forEach(function (r) {
+        if (!groups[r.group]) { groups[r.group] = []; order.push(r.group); }
+        groups[r.group].push(r);
+      });
+
+      container.innerHTML = '';
+      order.forEach(function (group) {
+        var results = groups[group].sort(function (a, b) { return b.value - a.value; });
+        var max = results[0].value;
+
+        var card = document.createElement('div');
+        card.className = 'card';
+
+        var hdr = document.createElement('div');
+        hdr.className = 'card-header';
+        hdr.textContent = group;
+        card.appendChild(hdr);
+
+        var html =
+          '<table><thead><tr>' +
+          '<th>Library</th><th class="num">IPS</th><th class="num">Relative</th><th class="bar-cell"></th>' +
+          '</tr></thead><tbody>';
+
+        results.forEach(function (r) {
+          var isTorque = r.name.lastIndexOf('torque', 0) === 0;
+          var pct = (r.value / max) * 100;
+          var rel = (r.value / max).toFixed(2) + 'x';
+          html +=
+            '<tr class="' + (isTorque ? 'torque' : '') + '">' +
+            '<td>' + r.name + '</td>' +
+            '<td class="num">' + formatIps(r.value) + '</td>' +
+            '<td class="num">' + rel + '</td>' +
+            '<td class="bar-cell"><div class="bar ' +
+            (isTorque ? 'bar-torque' : 'bar-other') +
+            '" style="width:' + pct + '%"></div></td>' +
+            '</tr>';
+        });
+
+        html += '</tbody></table>';
+        card.innerHTML += html;
+        container.appendChild(card);
+      });
+    }
+
+    // ── trend charts ────────────────────────────────────────────────────
+    var COLORS = ['#0969da', '#cf222e', '#1a7f37', '#8250df', '#bf8700', '#0550ae', '#6e7781'];
+
+    function renderTrends(benchData) {
+      var container = document.getElementById('trends');
+      if (!benchData || !benchData.entries) {
+        container.innerHTML = '<div class="empty">No trend data available yet.</div>';
+        return;
+      }
+
+      var benchName = Object.keys(benchData.entries)[0];
+      var entries = benchData.entries[benchName];
+      if (!entries || entries.length === 0) {
+        container.innerHTML = '<div class="empty">No trend data available yet.</div>';
+        return;
+      }
+
+      // collect all metric names from the latest entry
+      var latest = entries[entries.length - 1].benches;
+      var metricNames = latest.map(function (b) { return b.name; });
+
+      // group by type + payload
+      var groups = {}, order = [];
+      metricNames.forEach(function (name) {
+        var cls = classifyMetric(name);
+        var key = cls.type + ' \u2014 ' + cls.payload;
+        if (!groups[key]) { groups[key] = []; order.push(key); }
+        groups[key].push({ name: name, variant: cls.variant });
+      });
+
+      container.innerHTML = '';
+      order.forEach(function (groupName, gi) {
+        var metrics = groups[groupName];
+
+        var card = document.createElement('div');
+        card.className = 'chart-card';
+
+        var title = document.createElement('div');
+        title.className = 'chart-title';
+        title.textContent = groupName;
+        card.appendChild(title);
+
+        var canvas = document.createElement('canvas');
+        canvas.height = 260;
+        card.appendChild(canvas);
+        container.appendChild(card);
+
+        var labels = entries.map(function (e) {
+          return e.commit.id ? e.commit.id.substring(0, 7) : '';
+        });
+
+        var datasets = metrics.map(function (m, i) {
+          var values = entries.map(function (e) {
+            var b = e.benches.find(function (x) { return x.name === m.name; });
+            return b ? b.value : null;
+          });
+          return {
+            label: m.variant,
+            data: values,
+            borderColor: COLORS[i % COLORS.length],
+            backgroundColor: COLORS[i % COLORS.length] + '18',
+            tension: 0.15,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            fill: false
+          };
+        });
+
+        new Chart(canvas, {
+          type: 'line',
+          data: { labels: labels, datasets: datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) {
+                    return ctx.dataset.label + ': ' + formatIps(ctx.parsed.y) + ' ips';
+                  }
+                }
+              },
+              legend: { display: metrics.length > 1, position: 'bottom' }
+            },
+            scales: {
+              y: {
+                beginAtZero: false,
+                title: { display: true, text: 'iterations/s' },
+                ticks: { callback: function (v) { return formatIps(v); } }
+              },
+              x: { title: { display: true, text: 'Commit' } }
+            }
+          }
+        });
+      });
+    }
+
+    // ── load data ───────────────────────────────────────────────────────
+    fetch('comparison.json')
+      .then(function (r) { return r.json(); })
+      .then(renderComparison)
+      .catch(function () {
+        document.getElementById('comparison').innerHTML =
+          '<div class="empty">No comparison data available yet.</div>';
+      });
+
+    // data.js is optional (missing on first run)
+    var s = document.createElement('script');
+    s.src = 'data.js';
+    s.onload = function () { renderTrends(window.BENCHMARK_DATA); };
+    s.onerror = function () {
+      document.getElementById('trends').innerHTML =
+        '<div class="empty">No trend data available yet. Trends will appear after the second CI run.</div>';
+    };
+    document.head.appendChild(s);
+  </script>
+</body>
+</html>

@@ -56,12 +56,12 @@ jobs:
         env:
           BENCH_OUTPUT: json
 
-      - name: Store benchmark result
+      - name: Store trend data
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Torque Benchmarks
           tool: customBiggerIsBetter
-          output-file-path: bench_results.json
+          output-file-path: bench_torque.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           benchmark-data-dir-path: dev/bench
@@ -69,9 +69,27 @@ jobs:
           alert-threshold: "130%"
           fail-on-alert: false
 
+      - name: Deploy comparison data and custom page
+        run: |
+          git fetch origin gh-pages
+          git worktree add /tmp/gh-pages -B gh-pages origin/gh-pages
+          mkdir -p /tmp/gh-pages/dev/bench
+          cp bench_comparison.json /tmp/gh-pages/dev/bench/comparison.json
+          cp bench/index.html /tmp/gh-pages/dev/bench/index.html
+          cd /tmp/gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dev/bench/comparison.json dev/bench/index.html
+          if ! git diff --staged --quiet; then
+            git commit -m "Update comparison data and benchmark page"
+            git push origin gh-pages
+          fi
+
       - name: Upload raw results
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: bench_results.json
+          path: |
+            bench_torque.json
+            bench_comparison.json
           retention-days: 90
