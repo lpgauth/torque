@@ -1,5 +1,6 @@
 use crate::atoms;
 use crate::nif_util::make_tuple2;
+use crate::serde_decode;
 use crate::types::{value_to_term, MAX_DEPTH};
 use crate::ParsedDocument;
 use rustler::sys::{enif_make_list_from_array, ERL_NIF_TERM};
@@ -231,21 +232,7 @@ fn array_length<'a>(env: Env<'a>, doc: ResourceArc<ParsedDocument>, path: &str) 
 }
 
 fn do_decode<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
-    match sonic_rs::from_slice::<sonic_rs::Value>(bytes) {
-        Ok(value) => match value_to_term(env, &value, MAX_DEPTH) {
-            Some(term) => make_tuple2(env, atoms::ok().as_c_arg(), term.as_c_arg()),
-            None => make_tuple2(
-                env,
-                atoms::error().as_c_arg(),
-                atoms::nesting_too_deep().as_c_arg(),
-            ),
-        },
-        Err(e) => make_tuple2(
-            env,
-            atoms::error().as_c_arg(),
-            format!("{}", e).encode(env).as_c_arg(),
-        ),
-    }
+    serde_decode::decode_to_term(env, bytes)
 }
 
 #[rustler::nif]

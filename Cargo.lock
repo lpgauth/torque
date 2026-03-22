@@ -393,6 +393,7 @@ dependencies = [
  "itoa",
  "rustler",
  "ryu",
+ "serde",
  "sonic-rs",
 ]
 

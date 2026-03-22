@@ -11,5 +11,6 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.36"
 sonic-rs = "0.3"
+serde = "1"
 itoa = "1"
 ryu = "1"
