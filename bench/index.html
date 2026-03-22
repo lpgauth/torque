@@ -234,9 +234,12 @@
         title.textContent = groupName;
         card.appendChild(title);
 
+        var wrapper = document.createElement('div');
+        wrapper.style.position = 'relative';
+        wrapper.style.height = '260px';
         var canvas = document.createElement('canvas');
-        canvas.height = 260;
-        card.appendChild(canvas);
+        wrapper.appendChild(canvas);
+        card.appendChild(wrapper);
         container.appendChild(card);
 
         var labels = entries.map(function (e) {
