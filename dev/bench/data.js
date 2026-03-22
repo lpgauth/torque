@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774129435421,
+  "lastUpdate": 1774177965304,
   "repoUrl": "https://github.com/lpgauth/torque",
   "entries": {
     "Torque Benchmarks": [
@@ -213,6 +213,95 @@ window.BENCHMARK_DATA = {
           {
             "name": "jason: map => binary",
             "value": 113.30380135628383,
+            "unit": "iterations/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "lpgauth@gmail.com",
+            "name": "Louis-Philippe Gauthier",
+            "username": "lpgauth"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e3c13d45310ebac50998f6c7e7fbc4671063aca",
+          "message": "Merge pull request #13 from lpgauth/ci/benchmark-page-improvements\n\nImprove benchmark page with comparison tables and torque-only trend c…",
+          "timestamp": "2026-03-22T07:06:43-04:00",
+          "tree_id": "63ff53552331dfb1c47caa5292746f922d196367",
+          "url": "https://github.com/lpgauth/torque/commit/0e3c13d45310ebac50998f6c7e7fbc4671063aca"
+        },
+        "date": 1774177964590,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "decode (1.2 KB OpenRTB)",
+            "value": 147461.82012657885,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get_many_nil (1.2 KB OpenRTB)",
+            "value": 102220.62819211179,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get_many (1.2 KB OpenRTB)",
+            "value": 100119.11234089192,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get (1.2 KB OpenRTB)",
+            "value": 86344.81969363586,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "value": 836728.5861857742,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → binary (1.2 KB bid response)",
+            "value": 833790.5882608885,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → iodata (1.2 KB bid response)",
+            "value": 677128.8431276128,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → binary (1.2 KB bid response)",
+            "value": 675392.8571984564,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "decode (750 KB Twitter)",
+            "value": 253.05893828712746,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → iodata (750 KB Twitter)",
+            "value": 686.1787810581776,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → binary (750 KB Twitter)",
+            "value": 681.5943291646644,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → binary (750 KB Twitter)",
+            "value": 570.325945767721,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → iodata (750 KB Twitter)",
+            "value": 570.2899584627667,
             "unit": "iterations/s"
           }
         ]
