@@ -10,9 +10,12 @@ if System.get_env("BENCH_OUTPUT") == "json" do
 
     @impl true
     def format(suite, _opts) do
+      group = Agent.get(:bench_group, & &1)
+
       Enum.map(suite.scenarios, fn scenario ->
         %{
           "name" => scenario.name,
+          "group" => group,
           "unit" => "iterations/s",
           "value" => scenario.run_time_data.statistics.ips
         }
@@ -26,12 +29,21 @@ if System.get_env("BENCH_OUTPUT") == "json" do
   end
 
   Agent.start_link(fn -> [] end, name: :bench_results)
+  Agent.start_link(fn -> "" end, name: :bench_group)
 end
 
 ci_formatters =
   if System.get_env("BENCH_OUTPUT") == "json",
     do: [{CIFormatter, []}],
     else: []
+
+defmodule BenchGroup do
+  def set(group) do
+    if System.get_env("BENCH_OUTPUT") == "json" do
+      Agent.update(:bench_group, fn _ -> group end)
+    end
+  end
+end
 
 # Sample JSON payload (~1.3KB)
 sample_json =
@@ -187,6 +199,7 @@ bid_response_proplist =
       ]}
    ]}
 
+BenchGroup.set("Decode — 1.2 KB OpenRTB")
 IO.puts("=== DECODE BENCHMARK ===\n")
 
 Benchee.run(
@@ -207,6 +220,7 @@ Benchee.run(
     ] ++ ci_formatters
 )
 
+BenchGroup.set("Parse+Get — 1.2 KB OpenRTB")
 IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
 
 Benchee.run(
@@ -238,6 +252,7 @@ Benchee.run(
     ] ++ ci_formatters
 )
 
+BenchGroup.set("Encode — 1.2 KB bid response")
 IO.puts("\n=== ENCODE BENCHMARK ===\n")
 
 Benchee.run(
@@ -265,6 +280,7 @@ Benchee.run(
     ] ++ ci_formatters
 )
 
+BenchGroup.set("Decode — 750 KB Twitter")
 IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
 
 # Generate a synthetic ~750 KB JSON payload resembling a Twitter API response.
@@ -395,6 +411,7 @@ Benchee.run(
     ] ++ ci_formatters
 )
 
+BenchGroup.set("Encode — 750 KB Twitter")
 IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
 
 large_decoded_json = Torque.decode!(large_json)
@@ -440,6 +457,38 @@ Benchee.run(
 # Write accumulated CI results to JSON
 if System.get_env("BENCH_OUTPUT") == "json" do
   results = Agent.get(:bench_results, & &1)
-  File.write!("bench_results.json", Jason.encode!(results))
-  IO.puts("\nWrote #{length(results)} benchmark results to bench_results.json")
+
+  {sha, 0} = System.cmd("git", ["rev-parse", "--short", "HEAD"])
+
+  comparison = %{
+    "commit" => String.trim(sha),
+    "date" => DateTime.utc_now() |> DateTime.to_iso8601(),
+    "results" => results
+  }
+
+  File.write!("bench_comparison.json", Jason.encode!(comparison))
+
+  torque_results =
+    results
+    |> Enum.filter(fn r -> String.starts_with?(r["name"], "torque") end)
+    |> Enum.map(fn r ->
+      [category, payload] = String.split(r["group"], " — ", parts: 2)
+
+      variant =
+        r["name"]
+        |> String.replace(~r/^torque:?\s*/, "")
+        |> String.replace("=>", "→")
+
+      trend_name =
+        case category do
+          "Encode" -> "encode #{variant} (#{payload})"
+          _ -> "#{variant} (#{payload})"
+        end
+
+      %{"name" => trend_name, "unit" => r["unit"], "value" => r["value"]}
+    end)
+
+  File.write!("bench_torque.json", Jason.encode!(torque_results))
+
+  IO.puts("\nWrote #{length(results)} comparison + #{length(torque_results)} trend results")
 end
