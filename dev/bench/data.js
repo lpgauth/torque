@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774177965304,
+  "lastUpdate": 1774179178056,
   "repoUrl": "https://github.com/lpgauth/torque",
   "entries": {
     "Torque Benchmarks": [
@@ -302,6 +302,95 @@ window.BENCHMARK_DATA = {
           {
             "name": "encode map → iodata (750 KB Twitter)",
             "value": 570.2899584627667,
+            "unit": "iterations/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "lpgauth@gmail.com",
+            "name": "Louis-Philippe Gauthier",
+            "username": "lpgauth"
+          },
+          "committer": {
+            "email": "lpgauth@gmail.com",
+            "name": "Louis-Philippe Gauthier",
+            "username": "lpgauth"
+          },
+          "distinct": true,
+          "id": "d3b7d708e15a2f085292c9cd304ab954a366896e",
+          "message": "Fix chart height by wrapping canvas in sized container",
+          "timestamp": "2026-03-22T07:27:02-04:00",
+          "tree_id": "4a4d2f41450d158cb3f1ea01818dfb61cdda5076",
+          "url": "https://github.com/lpgauth/torque/commit/d3b7d708e15a2f085292c9cd304ab954a366896e"
+        },
+        "date": 1774179177353,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "decode (1.2 KB OpenRTB)",
+            "value": 143966.19531774806,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get_many_nil (1.2 KB OpenRTB)",
+            "value": 98614.13046945125,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get_many (1.2 KB OpenRTB)",
+            "value": 97750.58364292856,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get (1.2 KB OpenRTB)",
+            "value": 82028.2059360721,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → binary (1.2 KB bid response)",
+            "value": 831376.5963695382,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "value": 830201.2503719146,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → binary (1.2 KB bid response)",
+            "value": 666640.7298980021,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → iodata (1.2 KB bid response)",
+            "value": 661176.7079693419,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "decode (750 KB Twitter)",
+            "value": 216.51512685224975,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → binary (750 KB Twitter)",
+            "value": 668.4235222531742,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → iodata (750 KB Twitter)",
+            "value": 665.0309192951541,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → binary (750 KB Twitter)",
+            "value": 558.6617231940041,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → iodata (750 KB Twitter)",
+            "value": 555.1028047690035,
             "unit": "iterations/s"
           }
         ]
