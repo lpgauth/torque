@@ -121,30 +121,9 @@ IO.puts("JSON payload size: #{byte_size(sample_json)} bytes\n")
 fields = [
   "/id",
   "/site/domain",
-  "/site/page",
-  "/site/ref",
-  "/site/publisher/id",
-  "/site/cat",
-  "/device/devicetype",
-  "/device/ua",
   "/device/ip",
-  "/device/ipv6",
-  "/device/ifa",
-  "/device/os",
   "/device/geo/country",
-  "/device/geo/lat",
-  "/device/geo/lon",
-  "/device/geo/region",
-  "/device/geo/type",
-  "/device/geo/zip",
-  "/device/connectiontype",
-  "/device/carrier",
-  "/device/language",
-  "/user/id",
-  "/user/buyeruid",
-  "/user/ext/eids",
-  "/imp",
-  "/regs/coppa"
+  "/user/id"
 ]
 
 # Bid response for encoding benchmark
@@ -220,7 +199,7 @@ Benchee.run(
     ] ++ ci_formatters
 )
 
-BenchGroup.set("Parse+Get — 1.2 KB OpenRTB")
+BenchGroup.set("Parse+Get (5 fields) — 1.2 KB OpenRTB")
 IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
 
 Benchee.run(
