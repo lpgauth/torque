@@ -231,18 +231,16 @@ fn array_length<'a>(env: Env<'a>, doc: ResourceArc<ParsedDocument>, path: &str) 
     }
 }
 
-fn do_decode<'a>(env: Env<'a>, bytes: &[u8]) -> Term<'a> {
-    serde_decode::decode_to_term(env, bytes)
-}
-
 #[rustler::nif]
-fn decode<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
-    do_decode(env, json.as_slice())
+fn decode<'a>(env: Env<'a>, json: Binary<'a>) -> Term<'a> {
+    let input_term = json.encode(env).as_c_arg();
+    serde_decode::decode_to_term(env, input_term, json.as_slice())
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn decode_dirty<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
-    do_decode(env, json.as_slice())
+fn decode_dirty<'a>(env: Env<'a>, json: Binary<'a>) -> Term<'a> {
+    let input_term = json.encode(env).as_c_arg();
+    serde_decode::decode_to_term(env, input_term, json.as_slice())
 }
 
 #[rustler::nif]
