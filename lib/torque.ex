@@ -17,11 +17,11 @@ defmodule Torque do
       keys), lists, binaries, numbers, booleans, `nil`, and jiffy-style
       `{proplist}` tuples.
 
-  Inputs larger than 10 KB are automatically scheduled on a dirty CPU scheduler
+  Inputs larger than 20 KB are automatically scheduled on a dirty CPU scheduler
   to avoid blocking normal BEAM schedulers.
   """
 
-  @timeslice_bytes 10_240
+  @timeslice_bytes 20_480
 
   # --- Decoding ---
 
