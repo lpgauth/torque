@@ -9,12 +9,14 @@ use rustler::sys::{
 use rustler::{schedule, Env, MapIterator, NewBinary, Term, TermType};
 use std::mem::MaybeUninit;
 
-const TIMESLICE_BYTES: usize = 10_240;
+const BYTES_PER_REDUCTION: usize = 20;
+const REDUCTION_COUNT: usize = 4000;
 
 /// Compute a timeslice percentage (1–100) proportional to bytes processed.
 #[inline]
 fn timeslice_percent(bytes: usize) -> i32 {
-    ((bytes * 100 / TIMESLICE_BYTES) as i32).clamp(1, 100)
+    let reds = bytes / BYTES_PER_REDUCTION;
+    ((reds * 100 / REDUCTION_COUNT) as i32).clamp(1, 100)
 }
 
 #[derive(Debug)]

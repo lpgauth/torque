@@ -8,12 +8,14 @@ use rustler::{schedule, Binary, Encoder, Env, ListIterator, ResourceArc, Term};
 use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 
 const GET_MANY_STACK: usize = 64;
-const TIMESLICE_BYTES: usize = 10_240;
+const BYTES_PER_REDUCTION: usize = 20;
+const REDUCTION_COUNT: usize = 4000;
 
 /// Compute a timeslice percentage (1–100) proportional to bytes processed.
 #[inline]
 fn timeslice_percent(bytes: usize) -> i32 {
-    ((bytes * 100 / TIMESLICE_BYTES) as i32).clamp(1, 100)
+    let reds = bytes / BYTES_PER_REDUCTION;
+    ((reds * 100 / REDUCTION_COUNT) as i32).clamp(1, 100)
 }
 
 /// Returns the last value for `key` in an object, matching the last-value-wins
