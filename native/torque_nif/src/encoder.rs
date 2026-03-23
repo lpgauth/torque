@@ -6,8 +6,16 @@ use rustler::sys::{
     enif_get_list_cell, enif_get_tuple, enif_get_uint64, enif_inspect_binary, ErlNifBinary,
     ErlNifCharEncoding, ErlNifEnv, ERL_NIF_TERM,
 };
-use rustler::{Env, MapIterator, NewBinary, Term, TermType};
+use rustler::{schedule, Env, MapIterator, NewBinary, Term, TermType};
 use std::mem::MaybeUninit;
+
+const TIMESLICE_BYTES: usize = 10_240;
+
+/// Compute a timeslice percentage (1–100) proportional to bytes processed.
+#[inline]
+fn timeslice_percent(bytes: usize) -> i32 {
+    ((bytes * 100 / TIMESLICE_BYTES) as i32).clamp(1, 100)
+}
 
 #[derive(Debug)]
 enum EncodeError {
@@ -56,6 +64,7 @@ fn encode<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
     let env_raw = env.as_c_arg();
     match encode_term(env, env_raw, term, &mut buf, MAX_DEPTH) {
         Ok(()) => {
+            schedule::consume_timeslice(env, timeslice_percent(buf.len()));
             let mut binary = NewBinary::new(env, buf.len());
             binary.as_mut_slice().copy_from_slice(&buf);
             let bin_term: Term = binary.into();
@@ -83,6 +92,7 @@ fn encode_iodata<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
     let env_raw = env.as_c_arg();
     match encode_term(env, env_raw, term, &mut buf, MAX_DEPTH) {
         Ok(()) => {
+            schedule::consume_timeslice(env, timeslice_percent(buf.len()));
             let mut binary = NewBinary::new(env, buf.len());
             binary.as_mut_slice().copy_from_slice(&buf);
             binary.into()

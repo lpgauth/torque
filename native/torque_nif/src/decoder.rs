@@ -4,10 +4,17 @@ use crate::serde_decode;
 use crate::types::{value_to_term, MAX_DEPTH};
 use crate::ParsedDocument;
 use rustler::sys::{enif_make_list_from_array, ERL_NIF_TERM};
-use rustler::{Binary, Encoder, Env, ListIterator, ResourceArc, Term};
+use rustler::{schedule, Binary, Encoder, Env, ListIterator, ResourceArc, Term};
 use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 
 const GET_MANY_STACK: usize = 64;
+const TIMESLICE_BYTES: usize = 10_240;
+
+/// Compute a timeslice percentage (1–100) proportional to bytes processed.
+#[inline]
+fn timeslice_percent(bytes: usize) -> i32 {
+    ((bytes * 100 / TIMESLICE_BYTES) as i32).clamp(1, 100)
+}
 
 /// Returns the last value for `key` in an object, matching the last-value-wins
 /// behaviour of `value_to_term` / `build_map_dedup` for duplicate keys.
@@ -97,7 +104,10 @@ fn do_parse(bytes: &[u8]) -> Result<ResourceArc<ParsedDocument>, String> {
 #[rustler::nif]
 fn parse<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
     match do_parse(json.as_slice()) {
-        Ok(resource) => make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg()),
+        Ok(resource) => {
+            schedule::consume_timeslice(env, timeslice_percent(json.len()));
+            make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg())
+        }
         Err(reason) => make_tuple2(
             env,
             atoms::error().as_c_arg(),
@@ -234,7 +244,9 @@ fn array_length<'a>(env: Env<'a>, doc: ResourceArc<ParsedDocument>, path: &str) 
 #[rustler::nif]
 fn decode<'a>(env: Env<'a>, json: Binary<'a>) -> Term<'a> {
     let input_term = json.encode(env).as_c_arg();
-    serde_decode::decode_to_term(env, input_term, json.as_slice())
+    let result = serde_decode::decode_to_term(env, input_term, json.as_slice());
+    schedule::consume_timeslice(env, timeslice_percent(json.len()));
+    result
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
