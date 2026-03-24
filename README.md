@@ -27,6 +27,24 @@ end
 
 Precompiled binaries are available for common targets. To compile from source, install a stable Rust toolchain and set `TORQUE_BUILD=true`.
 
+### CPU-optimized variants
+
+On x86_64, precompiled binaries are available for three CPU feature levels:
+
+| Variant | CPU features | `target-cpu` |
+|---------|-------------|--------------|
+| baseline | SSE2 | `x86-64` |
+| v2 | SSE4.2, SSSE3, POPCNT | `x86-64-v2` |
+| v3 | AVX2, AVX, BMI1, BMI2, FMA | `x86-64-v3` |
+
+At compile time, Torque auto-detects the host CPU and downloads the best matching variant. To override detection (e.g., when cross-compiling for a different target):
+
+```bash
+TORQUE_CPU_VARIANT=v2 mix compile  # force SSE4.2 variant
+TORQUE_CPU_VARIANT=v3 mix compile  # force AVX2 variant
+TORQUE_CPU_VARIANT=base mix compile  # force baseline
+```
+
 ## Usage
 
 ### Decoding
