@@ -71,62 +71,62 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "torque: proplist => binary",
+            "name": "torque [proplist() :: binary()]",
             "value": 791694.3679536396,
             "unit": "iterations/s"
           },
           {
-            "name": "torque: proplist => iodata",
+            "name": "torque [proplist() :: iodata()]",
             "value": 772076.907813022,
             "unit": "iterations/s"
           },
           {
-            "name": "torque: map => iodata",
+            "name": "torque [map() :: iodata()]",
             "value": 662285.6186005804,
             "unit": "iterations/s"
           },
           {
-            "name": "torque: map => binary",
+            "name": "torque [map() :: binary()]",
             "value": 643232.7275494437,
             "unit": "iterations/s"
           },
           {
-            "name": "otp json: map => iodata",
+            "name": "otp json [map() :: iodata()]",
             "value": 491590.495837705,
             "unit": "iterations/s"
           },
           {
-            "name": "jiffy: proplist => iodata",
+            "name": "jiffy [proplist() :: iodata()]",
             "value": 406318.4399478911,
             "unit": "iterations/s"
           },
           {
-            "name": "simdjsone: proplist => iodata",
+            "name": "simdjsone [proplist() :: iodata()]",
             "value": 392677.64369348926,
             "unit": "iterations/s"
           },
           {
-            "name": "jiffy: map => iodata",
+            "name": "jiffy [map() :: iodata()]",
             "value": 339154.9450356695,
             "unit": "iterations/s"
           },
           {
-            "name": "otp json: map => binary",
+            "name": "otp json [map() :: binary()]",
             "value": 317630.77689053805,
             "unit": "iterations/s"
           },
           {
-            "name": "jason: map => iodata",
+            "name": "jason [map() :: iodata()]",
             "value": 312063.4983536024,
             "unit": "iterations/s"
           },
           {
-            "name": "simdjsone: map => iodata",
+            "name": "simdjsone [map() :: iodata()]",
             "value": 309128.3474508329,
             "unit": "iterations/s"
           },
           {
-            "name": "jason: map => binary",
+            "name": "jason [map() :: binary()]",
             "value": 227919.34538535416,
             "unit": "iterations/s"
           },
@@ -156,62 +156,62 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "torque: proplist => binary",
+            "name": "torque [proplist() :: binary()]",
             "value": 572.0804259334856,
             "unit": "iterations/s"
           },
           {
-            "name": "torque: proplist => iodata",
+            "name": "torque [proplist() :: iodata()]",
             "value": 564.7258193728827,
             "unit": "iterations/s"
           },
           {
-            "name": "torque: map => iodata",
+            "name": "torque [map() :: iodata()]",
             "value": 477.8708138822127,
             "unit": "iterations/s"
           },
           {
-            "name": "torque: map => binary",
+            "name": "torque [map() :: binary()]",
             "value": 475.3511455989929,
             "unit": "iterations/s"
           },
           {
-            "name": "jiffy: proplist => iodata",
+            "name": "jiffy [proplist() :: iodata()]",
             "value": 294.5378285645238,
             "unit": "iterations/s"
           },
           {
-            "name": "otp json: map => iodata",
+            "name": "otp json [map() :: iodata()]",
             "value": 259.82768671864136,
             "unit": "iterations/s"
           },
           {
-            "name": "jiffy: map => iodata",
+            "name": "jiffy [map() :: iodata()]",
             "value": 247.94241862114083,
             "unit": "iterations/s"
           },
           {
-            "name": "simdjsone: proplist => iodata",
+            "name": "simdjsone [proplist() :: iodata()]",
             "value": 242.2895990329278,
             "unit": "iterations/s"
           },
           {
-            "name": "simdjsone: map => iodata",
+            "name": "simdjsone [map() :: iodata()]",
             "value": 205.1336155209063,
             "unit": "iterations/s"
           },
           {
-            "name": "jason: map => iodata",
+            "name": "jason [map() :: iodata()]",
             "value": 167.0860974741863,
             "unit": "iterations/s"
           },
           {
-            "name": "otp json: map => binary",
+            "name": "otp json [map() :: binary()]",
             "value": 163.13305094630368,
             "unit": "iterations/s"
           },
           {
-            "name": "jason: map => binary",
+            "name": "jason [map() :: binary()]",
             "value": 113.30380135628383,
             "unit": "iterations/s"
           }
@@ -260,22 +260,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 836728.5861857742,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 833790.5882608885,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 677128.8431276128,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 675392.8571984564,
             "unit": "iterations/s"
           },
@@ -285,22 +285,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 686.1787810581776,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 681.5943291646644,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 570.325945767721,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 570.2899584627667,
             "unit": "iterations/s"
           }
@@ -349,22 +349,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 831376.5963695382,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 830201.2503719146,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 666640.7298980021,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 661176.7079693419,
             "unit": "iterations/s"
           },
@@ -374,22 +374,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 668.4235222531742,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 665.0309192951541,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 558.6617231940041,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 555.1028047690035,
             "unit": "iterations/s"
           }
@@ -438,22 +438,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 792835.2606492537,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 777902.2030622904,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 659336.9744439729,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 652879.8251613943,
             "unit": "iterations/s"
           },
@@ -463,22 +463,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 760.9798445731492,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 755.4035125642438,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 600.1607466942982,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 597.6899386720219,
             "unit": "iterations/s"
           }
@@ -527,22 +527,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 776163.150413194,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 725423.0878002102,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 629729.7244229803,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 621845.7291249469,
             "unit": "iterations/s"
           },
@@ -552,22 +552,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 506.0988830818231,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 505.1026291393998,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 428.72043359491084,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 422.50071767430944,
             "unit": "iterations/s"
           }
@@ -616,22 +616,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 775581.2920901085,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 758317.2108459033,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 643040.4578453205,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 642848.5770376071,
             "unit": "iterations/s"
           },
@@ -641,22 +641,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 608.9262417278887,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 607.7436629116514,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 486.4650377913799,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 483.7895857873691,
             "unit": "iterations/s"
           }
@@ -705,22 +705,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 763304.9807743741,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 761119.2862214809,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 646624.0937769437,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 637254.2535233435,
             "unit": "iterations/s"
           },
@@ -730,22 +730,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 605.2883032308459,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 600.9971410922471,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 484.97378452390944,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 481.4674085393985,
             "unit": "iterations/s"
           }
@@ -794,22 +794,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 740855.48279157,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 727174.988608004,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 640361.7016986718,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 636163.4397774512,
             "unit": "iterations/s"
           },
@@ -819,22 +819,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 595.947082361373,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 588.6881313320163,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 482.43624265987216,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 482.2370090736403,
             "unit": "iterations/s"
           }
@@ -883,22 +883,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 813671.7263421756,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 809260.2484899953,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 656066.1251671821,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 651341.569174474,
             "unit": "iterations/s"
           },
@@ -908,22 +908,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 706.5421724325461,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 706.4240739171747,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 583.1950355276949,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 579.992210790697,
             "unit": "iterations/s"
           }
@@ -972,22 +972,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 780023.5792859767,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 746198.0379819502,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 660931.9548490575,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 655174.8401314588,
             "unit": "iterations/s"
           },
@@ -997,22 +997,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 597.2220411558534,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 589.3443109798827,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 483.3852884451321,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 481.07943046503897,
             "unit": "iterations/s"
           }
@@ -1061,22 +1061,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 744104.0641022614,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 733742.1219566677,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 611578.4031853141,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 608340.420037902,
             "unit": "iterations/s"
           },
@@ -1086,22 +1086,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 548.1699953161046,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 487.36233972162387,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 487.0222542105595,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 485.4447363390756,
             "unit": "iterations/s"
           }
@@ -1150,22 +1150,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 727398.3047870487,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 716727.9648258585,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 624489.5792969514,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 617773.2010613037,
             "unit": "iterations/s"
           },
@@ -1175,22 +1175,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 596.5305646638438,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 594.9368841842429,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 516.7048073691566,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 477.0426538520278,
             "unit": "iterations/s"
           }
@@ -1239,22 +1239,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
             "value": 724979.787037927,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (1.2 KB bid response)",
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
             "value": 721108.4192702695,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (1.2 KB bid response)",
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
             "value": 622194.5922472192,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (1.2 KB bid response)",
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
             "value": 614230.545738969,
             "unit": "iterations/s"
           },
@@ -1264,22 +1264,22 @@ window.BENCHMARK_DATA = {
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → iodata (750 KB Twitter)",
+            "name": "encode proplist :: iodata (750 KB Twitter)",
             "value": 578.4276076051431,
             "unit": "iterations/s"
           },
           {
-            "name": "encode proplist → binary (750 KB Twitter)",
+            "name": "encode proplist :: binary (750 KB Twitter)",
             "value": 571.7081928991093,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → iodata (750 KB Twitter)",
+            "name": "encode map :: iodata (750 KB Twitter)",
             "value": 510.32733961180514,
             "unit": "iterations/s"
           },
           {
-            "name": "encode map → binary (750 KB Twitter)",
+            "name": "encode map :: binary (750 KB Twitter)",
             "value": 510.091602312003,
             "unit": "iterations/s"
           }
