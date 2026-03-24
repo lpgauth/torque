@@ -18,7 +18,7 @@ jobs:
         run: gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --draft
 
   build_release:
-    name: NIF ${{ matrix.nif }} - ${{ matrix.job.target }} (${{ matrix.job.os }})
+    name: NIF ${{ matrix.nif }} - ${{ matrix.job.target }}${{ matrix.job.variant && format(' ({0})', matrix.job.variant) || '' }}
     needs: create_release
     runs-on: ${{ matrix.job.os }}
 
@@ -32,8 +32,12 @@ jobs:
         job:
           - { target: aarch64-apple-darwin,        os: macos-14 }
           - { target: aarch64-unknown-linux-gnu,   os: ubuntu-22.04, use-cross: true }
-          - { target: x86_64-apple-darwin,         os: macos-14 }
-          - { target: x86_64-unknown-linux-gnu,    os: ubuntu-22.04 }
+          - { target: x86_64-apple-darwin,         os: macos-14,     rustflags: "-C target-cpu=x86-64" }
+          - { target: x86_64-apple-darwin,         os: macos-14,     rustflags: "-C target-cpu=x86-64-v2", variant: v2 }
+          - { target: x86_64-apple-darwin,         os: macos-14,     rustflags: "-C target-cpu=x86-64-v3", variant: v3 }
+          - { target: x86_64-unknown-linux-gnu,    os: ubuntu-22.04, rustflags: "-C target-cpu=x86-64" }
+          - { target: x86_64-unknown-linux-gnu,    os: ubuntu-22.04, rustflags: "-C target-cpu=x86-64-v2", variant: v2 }
+          - { target: x86_64-unknown-linux-gnu,    os: ubuntu-22.04, rustflags: "-C target-cpu=x86-64-v3", variant: v3 }
 
     steps:
       - name: Checkout source code
@@ -52,7 +56,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v0-precomp
-          shared-key: ${{ matrix.job.target }}-${{ matrix.nif }}
+          shared-key: ${{ matrix.job.target }}-${{ matrix.nif }}-${{ matrix.job.variant || 'base' }}
 
       - name: Install cross
         if: matrix.job.use-cross
@@ -62,6 +66,9 @@ jobs:
       - name: Build native library
         shell: bash
         run: |
+          if [ -n "${{ matrix.job.rustflags }}" ]; then
+            export RUSTFLAGS="${{ matrix.job.rustflags }}"
+          fi
           if [ "${{ matrix.job.use-cross }}" = "true" ]; then
             RUSTLER_NIF_VERSION=${{ matrix.nif }} cross build --release --target ${{ matrix.job.target }} --package torque_nif
           else
@@ -82,7 +89,12 @@ jobs:
           fi
 
           # RustlerPrecompiled expects the file inside the archive to match this name
-          NIF_NAME="libtorque_nif-v${VERSION}-nif-${NIF}-${TARGET}.so"
+          VARIANT="${{ matrix.job.variant }}"
+          NIF_NAME="libtorque_nif-v${VERSION}-nif-${NIF}-${TARGET}"
+          if [ -n "${VARIANT}" ]; then
+            NIF_NAME="${NIF_NAME}--${VARIANT}"
+          fi
+          NIF_NAME="${NIF_NAME}.so"
           cp "${LIB_FILE}" "${NIF_NAME}"
 
           ARCHIVE_NAME="${NIF_NAME}.tar.gz"

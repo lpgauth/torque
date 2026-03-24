@@ -15,7 +15,17 @@ defmodule Torque.Native do
       x86_64-unknown-linux-gnu
     ),
     nif_versions: ["2.15"],
-    version: version
+    version: version,
+    variants: %{
+      "x86_64-unknown-linux-gnu" => [
+        v3: &Torque.CPU.avx2?/0,
+        v2: &Torque.CPU.sse42?/0
+      ],
+      "x86_64-apple-darwin" => [
+        v3: &Torque.CPU.avx2?/0,
+        v2: &Torque.CPU.sse42?/0
+      ]
+    }
 
   def parse(_json), do: :erlang.nif_error(:nif_not_loaded)
   def parse_dirty(_json), do: :erlang.nif_error(:nif_not_loaded)
