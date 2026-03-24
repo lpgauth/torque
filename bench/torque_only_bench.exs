@@ -1,4 +1,4 @@
-# Torque-only benchmark (skips simdjsone, jiffy, jason, otp json)
+# Torque-only benchmark
 #
 # Run with: MIX_ENV=bench mix run bench/torque_only_bench.exs
 
@@ -153,67 +153,6 @@ bid_response_proplist =
       ]}
    ]}
 
-IO.puts("=== DECODE BENCHMARK ===\n")
-
-Benchee.run(
-  %{
-    "torque decode" => fn -> Torque.decode!(sample_json) end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
-)
-
-IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
-
-Benchee.run(
-  %{
-    "torque parse+get" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      for f <- fields, do: Torque.get(doc, f)
-    end,
-    "torque parse+get_many" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      Torque.get_many(doc, fields)
-    end,
-    "torque parse+get_many_nil" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      Torque.get_many_nil(doc, fields)
-    end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
-)
-
-IO.puts("\n=== ENCODE BENCHMARK ===\n")
-
-Benchee.run(
-  %{
-    "torque: map => binary" => fn -> Torque.encode!(bid_response) end,
-    "torque: proplist => binary" => fn -> Torque.encode!(bid_response_proplist) end,
-    "torque: map => iodata" => fn -> Torque.encode_to_iodata(bid_response) end,
-    "torque: proplist => iodata" => fn -> Torque.encode_to_iodata(bid_response_proplist) end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
-)
-
-IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
-
 large_json =
   Jason.encode!(%{
     "statuses" =>
@@ -320,7 +259,72 @@ large_json =
     }
   })
 
-IO.puts("JSON payload size: #{byte_size(large_json)} bytes\n")
+IO.puts("Large JSON payload size: #{byte_size(large_json)} bytes\n")
+
+large_decoded_json = Torque.decode!(large_json)
+
+to_proplist = fn f, v ->
+  cond do
+    is_map(v) -> {Enum.map(v, fn {k, val} -> {k, f.(f, val)} end)}
+    is_list(v) -> Enum.map(v, &f.(f, &1))
+    true -> v
+  end
+end
+
+large_decoded_proplist = to_proplist.(to_proplist, large_decoded_json)
+
+IO.puts("=== ENCODE BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "torque [map() :: binary()]" => fn -> Torque.encode!(bid_response) end,
+    "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(bid_response) end,
+    "torque [proplist() :: binary()]" => fn -> Torque.encode!(bid_response_proplist) end,
+    "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(bid_response_proplist) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)
+
+IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "torque [map() :: binary()]" => fn -> Torque.encode!(large_decoded_json) end,
+    "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
+    "torque [proplist() :: binary()]" => fn -> Torque.encode!(large_decoded_proplist) end,
+    "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_proplist) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)
+
+IO.puts("\n=== DECODE BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "torque decode" => fn -> Torque.decode!(sample_json) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)
+
+IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
 
 Benchee.run(
   %{
@@ -335,26 +339,22 @@ Benchee.run(
   ]
 )
 
-IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
-
-large_decoded_json = Torque.decode!(large_json)
-
-to_proplist = fn f, v ->
-  cond do
-    is_map(v) -> {Enum.map(v, fn {k, val} -> {k, f.(f, val)} end)}
-    is_list(v) -> Enum.map(v, &f.(f, &1))
-    true -> v
-  end
-end
-
-large_decoded_proplist = to_proplist.(to_proplist, large_decoded_json)
+IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
 
 Benchee.run(
   %{
-    "torque: map => binary" => fn -> Torque.encode!(large_decoded_json) end,
-    "torque: proplist => binary" => fn -> Torque.encode!(large_decoded_proplist) end,
-    "torque: map => iodata" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
-    "torque: proplist => iodata" => fn -> Torque.encode_to_iodata(large_decoded_proplist) end
+    "torque parse+get" => fn ->
+      {:ok, doc} = Torque.parse(sample_json)
+      for f <- fields, do: Torque.get(doc, f)
+    end,
+    "torque parse+get_many" => fn ->
+      {:ok, doc} = Torque.parse(sample_json)
+      Torque.get_many(doc, fields)
+    end,
+    "torque parse+get_many_nil" => fn ->
+      {:ok, doc} = Torque.parse(sample_json)
+      Torque.get_many_nil(doc, fields)
+    end
   },
   warmup: 2,
   time: 5,
