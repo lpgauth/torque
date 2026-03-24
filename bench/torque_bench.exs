@@ -178,90 +178,6 @@ bid_response_proplist =
       ]}
    ]}
 
-BenchGroup.set("Decode — 1.2 KB OpenRTB")
-IO.puts("=== DECODE BENCHMARK ===\n")
-
-Benchee.run(
-  %{
-    "torque decode" => fn -> Torque.decode!(sample_json) end,
-    "simdjsone decode" => fn -> :simdjson.decode(sample_json) end,
-    "jiffy decode" => fn -> :jiffy.decode(sample_json, [:return_maps]) end,
-    "jason decode" => fn -> Jason.decode!(sample_json) end,
-    "otp json decode" => fn -> :json.decode(sample_json) end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters:
-    [
-      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-    ] ++ ci_formatters
-)
-
-BenchGroup.set("Parse+Get (5 fields) — 1.2 KB OpenRTB")
-IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
-
-Benchee.run(
-  %{
-    "torque parse+get" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      for f <- fields, do: Torque.get(doc, f)
-    end,
-    "torque parse+get_many" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      Torque.get_many(doc, fields)
-    end,
-    "torque parse+get_many_nil" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      Torque.get_many_nil(doc, fields)
-    end,
-    "simdjsone parse+get" => fn ->
-      ref = :simdjson.parse(sample_json)
-      for f <- fields, do: :simdjson.get(ref, f)
-    end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters:
-    [
-      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-    ] ++ ci_formatters
-)
-
-BenchGroup.set("Encode — 1.2 KB bid response")
-IO.puts("\n=== ENCODE BENCHMARK ===\n")
-
-Benchee.run(
-  %{
-    "torque: map => binary" => fn -> Torque.encode!(bid_response) end,
-    "torque: proplist => binary" => fn -> Torque.encode!(bid_response_proplist) end,
-    "torque: map => iodata" => fn -> Torque.encode_to_iodata(bid_response) end,
-    "torque: proplist => iodata" => fn -> Torque.encode_to_iodata(bid_response_proplist) end,
-    "jiffy: proplist => iodata" => fn -> :jiffy.encode(bid_response_proplist, [:force_utf8]) end,
-    "jiffy: map => iodata" => fn -> :jiffy.encode(bid_response) end,
-    "jason: map => binary" => fn -> Jason.encode!(bid_response) end,
-    "jason: map => iodata" => fn -> Jason.encode_to_iodata!(bid_response) end,
-    "simdjsone: map => iodata" => fn -> :simdjson.encode(bid_response) end,
-    "simdjsone: proplist => iodata" => fn -> :simdjson.encode(bid_response_proplist) end,
-    "otp json: map => iodata" => fn -> :json.encode(bid_response) end,
-    "otp json: map => binary" => fn -> :erlang.iolist_to_binary(:json.encode(bid_response)) end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters:
-    [
-      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-    ] ++ ci_formatters
-)
-
-BenchGroup.set("Decode — 750 KB Twitter")
-IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
-
 # Generate a synthetic ~750 KB JSON payload resembling a Twitter API response.
 # Each status entry contains a full user object, entities, and metadata (~2.4 KB/entry).
 large_json =
@@ -370,28 +286,7 @@ large_json =
     }
   })
 
-IO.puts("JSON payload size: #{byte_size(large_json)} bytes\n")
-
-Benchee.run(
-  %{
-    "torque decode" => fn -> Torque.decode!(large_json) end,
-    "simdjsone decode" => fn -> :simdjson.decode(large_json) end,
-    "jiffy decode" => fn -> :jiffy.decode(large_json, [:return_maps]) end,
-    "jason decode" => fn -> Jason.decode!(large_json) end,
-    "otp json decode" => fn -> :json.decode(large_json) end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters:
-    [
-      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-    ] ++ ci_formatters
-)
-
-BenchGroup.set("Encode — 750 KB Twitter")
-IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
+IO.puts("Large JSON payload size: #{byte_size(large_json)} bytes\n")
 
 large_decoded_json = Torque.decode!(large_json)
 
@@ -406,21 +301,124 @@ end
 
 large_decoded_proplist = to_proplist.(to_proplist, large_decoded_json)
 
+BenchGroup.set("Encode — 1.2 KB OpenRTB")
+IO.puts("=== ENCODE BENCHMARK ===\n")
+
 Benchee.run(
   %{
-    "torque: map => binary" => fn -> Torque.encode!(large_decoded_json) end,
-    "torque: proplist => binary" => fn -> Torque.encode!(large_decoded_proplist) end,
-    "torque: map => iodata" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
-    "torque: proplist => iodata" => fn -> Torque.encode_to_iodata(large_decoded_proplist) end,
-    "jiffy: proplist => iodata" => fn -> :jiffy.encode(large_decoded_proplist) end,
-    "jiffy: map => iodata" => fn -> :jiffy.encode(large_decoded_json) end,
-    "jason: map => binary" => fn -> Jason.encode!(large_decoded_json) end,
-    "jason: map => iodata" => fn -> Jason.encode_to_iodata!(large_decoded_json) end,
-    "simdjsone: map => iodata" => fn -> :simdjson.encode(large_decoded_json) end,
-    "simdjsone: proplist => iodata" => fn -> :simdjson.encode(large_decoded_proplist) end,
-    "otp json: map => iodata" => fn -> :json.encode(large_decoded_json) end,
-    "otp json: map => binary" => fn ->
-      :erlang.iolist_to_binary(:json.encode(large_decoded_json))
+    "jason [map() :: binary()]" => fn -> Jason.encode!(bid_response) end,
+    "jason [map() :: iodata()]" => fn -> Jason.encode_to_iodata!(bid_response) end,
+    "jiffy [map() :: iodata()]" => fn -> :jiffy.encode(bid_response) end,
+    "jiffy [proplist() :: iodata()]" => fn ->
+      :jiffy.encode(bid_response_proplist, [:force_utf8])
+    end,
+    "otp json [map() :: iodata()]" => fn -> :json.encode(bid_response) end,
+    "simdjsone [map() :: iodata()]" => fn -> :simdjson.encode(bid_response) end,
+    "simdjsone [proplist() :: iodata()]" => fn -> :simdjson.encode(bid_response_proplist) end,
+    "torque [map() :: binary()]" => fn -> Torque.encode!(bid_response) end,
+    "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(bid_response) end,
+    "torque [proplist() :: binary()]" => fn -> Torque.encode!(bid_response_proplist) end,
+    "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(bid_response_proplist) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
+)
+
+BenchGroup.set("Encode — 750 KB Twitter")
+IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "jason [map() :: binary()]" => fn -> Jason.encode!(large_decoded_json) end,
+    "jason [map() :: iodata()]" => fn -> Jason.encode_to_iodata!(large_decoded_json) end,
+    "jiffy [map() :: iodata()]" => fn -> :jiffy.encode(large_decoded_json) end,
+    "jiffy [proplist() :: iodata()]" => fn -> :jiffy.encode(large_decoded_proplist) end,
+    "otp json [map() :: iodata()]" => fn -> :json.encode(large_decoded_json) end,
+    "simdjsone [map() :: iodata()]" => fn -> :simdjson.encode(large_decoded_json) end,
+    "simdjsone [proplist() :: iodata()]" => fn -> :simdjson.encode(large_decoded_proplist) end,
+    "torque [map() :: binary()]" => fn -> Torque.encode!(large_decoded_json) end,
+    "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
+    "torque [proplist() :: binary()]" => fn -> Torque.encode!(large_decoded_proplist) end,
+    "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_proplist) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
+)
+
+BenchGroup.set("Decode — 1.2 KB OpenRTB")
+IO.puts("\n=== DECODE BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "jason decode" => fn -> Jason.decode!(sample_json) end,
+    "jiffy decode" => fn -> :jiffy.decode(sample_json, [:return_maps]) end,
+    "otp json decode" => fn -> :json.decode(sample_json) end,
+    "simdjsone decode" => fn -> :simdjson.decode(sample_json) end,
+    "torque decode" => fn -> Torque.decode!(sample_json) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
+)
+
+BenchGroup.set("Decode — 750 KB Twitter")
+IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "jason decode" => fn -> Jason.decode!(large_json) end,
+    "jiffy decode" => fn -> :jiffy.decode(large_json, [:return_maps]) end,
+    "otp json decode" => fn -> :json.decode(large_json) end,
+    "simdjsone decode" => fn -> :simdjson.decode(large_json) end,
+    "torque decode" => fn -> Torque.decode!(large_json) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
+)
+
+BenchGroup.set("Parse+Get (5 fields) — 1.2 KB OpenRTB")
+IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "simdjsone parse+get" => fn ->
+      ref = :simdjson.parse(sample_json)
+      for f <- fields, do: :simdjson.get(ref, f)
+    end,
+    "torque parse+get" => fn ->
+      {:ok, doc} = Torque.parse(sample_json)
+      for f <- fields, do: Torque.get(doc, f)
+    end,
+    "torque parse+get_many" => fn ->
+      {:ok, doc} = Torque.parse(sample_json)
+      Torque.get_many(doc, fields)
+    end,
+    "torque parse+get_many_nil" => fn ->
+      {:ok, doc} = Torque.parse(sample_json)
+      Torque.get_many_nil(doc, fields)
     end
   },
   warmup: 2,
@@ -455,8 +453,9 @@ if System.get_env("BENCH_OUTPUT") == "json" do
 
       variant =
         r["name"]
-        |> String.replace(~r/^torque:?\s*/, "")
-        |> String.replace("=>", "→")
+        |> String.replace(~r/^torque\s*/, "")
+        |> String.replace(~r/[\[\]()]/, "")
+        |> String.trim()
 
       trend_name =
         case category do

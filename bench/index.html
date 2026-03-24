@@ -146,11 +146,24 @@
         data.commit + '</a>' +
         ' (' + new Date(data.date).toLocaleDateString() + ')';
 
-      // group by benchmark group, preserving order
-      var groups = {}, order = [];
+      var GROUP_ORDER = [
+        'Encode — 1.2 KB OpenRTB',
+        'Encode — 750 KB Twitter',
+        'Decode — 1.2 KB OpenRTB',
+        'Decode — 750 KB Twitter',
+        'Parse+Get (5 fields) — 1.2 KB OpenRTB'
+      ];
+
+      // group by benchmark group, sorted by GROUP_ORDER
+      var groups = {};
       data.results.forEach(function (r) {
-        if (!groups[r.group]) { groups[r.group] = []; order.push(r.group); }
-        groups[r.group].push(r);
+        var g = r.group;
+        if (!groups[g]) { groups[g] = []; }
+        groups[g].push(r);
+      });
+      var order = GROUP_ORDER.filter(function (g) { return groups[g]; });
+      Object.keys(groups).forEach(function (g) {
+        if (order.indexOf(g) === -1) order.push(g);
       });
 
       container.innerHTML = '';
@@ -213,13 +226,25 @@
       var latest = entries[entries.length - 1].benches;
       var metricNames = latest.map(function (b) { return b.name; });
 
-      // group by type + payload
-      var groups = {}, order = [];
+      var TREND_ORDER = [
+        'Encode \u2014 1.2 KB OpenRTB',
+        'Encode \u2014 750 KB Twitter',
+        'Decode \u2014 1.2 KB OpenRTB',
+        'Decode \u2014 750 KB Twitter',
+        'Parse+Get \u2014 1.2 KB OpenRTB'
+      ];
+
+      // group by type + payload, sorted by TREND_ORDER
+      var groups = {};
       metricNames.forEach(function (name) {
         var cls = classifyMetric(name);
         var key = cls.type + ' \u2014 ' + cls.payload;
-        if (!groups[key]) { groups[key] = []; order.push(key); }
+        if (!groups[key]) { groups[key] = []; }
         groups[key].push({ name: name, variant: cls.variant });
+      });
+      var order = TREND_ORDER.filter(function (g) { return groups[g]; });
+      Object.keys(groups).forEach(function (g) {
+        if (order.indexOf(g) === -1) order.push(g);
       });
 
       container.innerHTML = '';
