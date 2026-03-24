@@ -161,68 +161,66 @@ Functions return `{:error, reason}` tuples (or raise `ArgumentError` for bang/io
 
 Apple M2 Pro, OTP 28, Elixir 1.19:
 
-### Decode (1.2 KB JSON)
+### Decode (1.2 KB OpenRTB)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| torque | **271.9K** | **3.68 μs** | **3.54 μs** | **6.54 μs** | **1.56 KB** |
-| simdjsone | 188.9K | 5.29 μs | 5.00 μs | 9.63 μs | 1.59 KB |
-| jiffy | 152.4K | 6.56 μs | 5.79 μs | 15.79 μs | **1.56 KB** |
-| otp json | 135.0K | 7.41 μs | 7.04 μs | 13.54 μs | 7.73 KB |
-| jason | 106.6K | 9.38 μs | 8.54 μs | 21.75 μs | 9.54 KB |
+| **torque** | **257.2K** | **3.89 μs** | **3.67 μs** | **8.17 μs** | **1.56 KB** |
+| **simdjsone** | 170.0K | 5.88 μs | 5.13 μs | 14.75 μs | 1.59 KB |
+| **jiffy** | 146.1K | 6.85 μs | 6.00 μs | 17.08 μs | **1.56 KB** |
+| **otp json** | 127.2K | 7.86 μs | 7.29 μs | 18.00 μs | 7.73 KB |
+| **jason** | 107.7K | 9.29 μs | 8.71 μs | 18.08 μs | 9.54 KB |
 
-### Decode (750 KB JSON)
-
-| Library | ips | mean | median | p99 | memory |
-|---|---|---|---|---|---|
-| torque | **513.5** | **1.95 ms** | **1.80 ms** | **2.51 ms** | **1.56 KB** |
-| simdjsone | 448.9 | 2.23 ms | 1.89 ms | 3.33 ms | **1.56 KB** |
-| otp json | 191.5 | 5.22 ms | 5.20 ms | 6.15 ms | 2.49 MB |
-| jason | 142.2 | 7.03 ms | 7.01 ms | 7.70 ms | 3.55 MB |
-| jiffy | 112.4 | 8.90 ms | 8.92 ms | 10.00 ms | 5.53 MB |
-
-### Encode (1.2 KB JSON)
+### Decode (750 KB Twitter)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| torque: proplist => binary | **1243.5K** | **0.80 μs** | **0.71 μs** | **1.00 μs** | 88 B |
-| torque: proplist => iodata | 1242.6K | 0.80 μs | **0.71 μs** | **1.00 μs** | **64 B** |
-| torque: map => iodata | 1046.0K | 0.96 μs | 0.88 μs | 1.17 μs | **64 B** |
-| torque: map => binary | 1044.8K | 0.96 μs | 0.88 μs | 1.17 μs | 88 B |
-| otp json: map => iodata | 943.3K | 1.06 μs | 0.83 μs | 10.37 μs | 3928 B |
-| jason: map => iodata | 625.3K | 1.60 μs | 1.50 μs | 2.63 μs | 3848 B |
-| jiffy: proplist => iodata | 563.3K | 1.78 μs | 1.50 μs | 3.83 μs | 120 B |
-| otp json: map => binary | 559.1K | 1.79 μs | 1.54 μs | 5.13 μs | 3992 B |
-| jiffy: map => iodata | 493.5K | 2.03 μs | 1.83 μs | 2.54 μs | 824 B |
-| simdjsone: proplist => iodata | 458.1K | 2.18 μs | 2.04 μs | 2.71 μs | 184 B |
-| jason: map => binary | 384.3K | 2.60 μs | 2.38 μs | 6.04 μs | 3912 B |
-| simdjsone: map => iodata | 379.8K | 2.63 μs | 2.38 μs | 5.79 μs | 888 B |
+| **torque** | **505.0** | **1.98 ms** | **1.82 ms** | **2.58 ms** | **1.56 KB** |
+| **simdjsone** | 415.3 | 2.41 ms | 1.90 ms | 3.82 ms | **1.56 KB** |
+| **otp json** | 182.5 | 5.48 ms | 5.45 ms | 6.58 ms | 2.49 MB |
+| **jason** | 136.8 | 7.31 ms | 7.13 ms | 12.29 ms | 3.55 MB |
+| **jiffy** | 100.7 | 9.93 ms | 10.01 ms | 11.91 ms | 5.53 MB |
 
-### Encode (750 KB JSON)
+### Encode (1.2 KB OpenRTB)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| torque: proplist => iodata | **1280.9** | **0.78 ms** | **0.76 ms** | **0.96 ms** | **64 B** |
-| torque: proplist => binary | 1270.8 | 0.79 ms | **0.76 ms** | 1.01 ms | 88 B |
-| torque: map => iodata | 1109.3 | 0.90 ms | 0.89 ms | 1.10 ms | **64 B** |
-| torque: map => binary | 1078.4 | 0.93 ms | 0.90 ms | 1.46 ms | 88 B |
-| jiffy: proplist => iodata | 329.1 | 3.04 ms | 2.78 ms | 7.86 ms | 37.7 KB |
-| jiffy: map => iodata | 285.8 | 3.50 ms | 3.56 ms | 4.18 ms | 1.06 MB |
-| otp json: map => iodata | 263.5 | 3.80 ms | 3.97 ms | 4.91 ms | 5.40 MB |
-| simdjsone: proplist => iodata | 257.8 | 3.88 ms | 3.79 ms | 6.54 ms | 37.7 KB |
-| jason: map => iodata | 255.5 | 3.91 ms | 3.74 ms | 6.04 ms | 4.96 MB |
-| simdjsone: map => iodata | 225.3 | 4.44 ms | 4.31 ms | 5.34 ms | 1.06 MB |
-| otp json: map => binary | 180.1 | 5.55 ms | 5.58 ms | 13.46 ms | 5.40 MB |
-| jason: map => binary | 141.4 | 7.07 ms | 7.03 ms | 7.94 ms | 4.96 MB |
+| **torque** [proplist() :: binary()] | **1274.3K** | **0.78 μs** | **0.71 μs** | **0.92 μs** | 88 B |
+| **torque** [proplist() :: iodata()] | 1261.4K | 0.79 μs | **0.71 μs** | 0.96 μs | **64 B** |
+| **otp json** [map() :: iodata()] | 1078.0K | 0.93 μs | 0.88 μs | 1.38 μs | 3928 B |
+| **torque** [map() :: iodata()] | 1064.8K | 0.94 μs | 0.88 μs | 1.13 μs | **64 B** |
+| **torque** [map() :: binary()] | 1053.1K | 0.95 μs | 0.88 μs | 1.17 μs | 88 B |
+| **jason** [map() :: iodata()] | 591.3K | 1.69 μs | 1.50 μs | 3.54 μs | 3848 B |
+| **jiffy** [proplist() :: iodata()] | 579.2K | 1.73 μs | 1.50 μs | 2.13 μs | 120 B |
+| **jiffy** [map() :: iodata()] | 498.1K | 2.01 μs | 1.83 μs | 2.50 μs | 824 B |
+| **simdjsone** [proplist() :: iodata()] | 441.6K | 2.26 μs | 2.00 μs | 3.71 μs | 184 B |
+| **jason** [map() :: binary()] | 399.7K | 2.50 μs | 2.33 μs | 4.21 μs | 3912 B |
+| **simdjsone** [map() :: iodata()] | 386.7K | 2.59 μs | 2.38 μs | 4.54 μs | 888 B |
 
-### Parse + Get (1.2 KB JSON)
+### Encode (750 KB Twitter)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| torque parse+get_many_nil | **478.4K** | **2.09 μs** | **1.75 μs** | **4.83 μs** | **288 B** |
-| torque parse+get_many | 471.8K | 2.12 μs | 1.75 μs | 4.83 μs | 408 B |
-| torque parse+get | 445.9K | 2.24 μs | 1.96 μs | 5.88 μs | 432 B |
-| simdjsone parse+get | 445.5K | 2.24 μs | 1.67 μs | 5.17 μs | 408 B |
+| **torque** [proplist() :: iodata()] | **1272.5** | **0.79 ms** | **0.76 ms** | **0.99 ms** | **64 B** |
+| **torque** [proplist() :: binary()] | 1252.1 | 0.80 ms | 0.77 ms | 1.04 ms | 88 B |
+| **torque** [map() :: iodata()] | 1102.9 | 0.91 ms | 0.89 ms | 1.09 ms | **64 B** |
+| **torque** [map() :: binary()] | 1084.0 | 0.92 ms | 0.89 ms | 1.20 ms | 88 B |
+| **jiffy** [proplist() :: iodata()] | 342.0 | 2.92 ms | 2.82 ms | 4.75 ms | 37.7 KB |
+| **jiffy** [map() :: iodata()] | 287.1 | 3.48 ms | 3.32 ms | 4.29 ms | 1.06 MB |
+| **simdjsone** [proplist() :: iodata()] | 259.7 | 3.85 ms | 3.78 ms | 5.79 ms | 37.7 KB |
+| **jason** [map() :: iodata()] | 241.3 | 4.14 ms | 3.94 ms | 6.99 ms | 4.96 MB |
+| **simdjsone** [map() :: iodata()] | 216.1 | 4.63 ms | 4.66 ms | 6.51 ms | 1.06 MB |
+| **otp json** [map() :: iodata()] | 200.2 | 4.99 ms | 5.10 ms | 6.97 ms | 5.40 MB |
+| **jason** [map() :: binary()] | 130.9 | 7.64 ms | 7.53 ms | 9.09 ms | 4.96 MB |
+
+### Parse + Get (5 fields) (1.2 KB OpenRTB)
+
+| Library | ips | mean | median | p99 | memory |
+|---|---|---|---|---|---|
+| **torque** parse+get_many_nil | **455.8K** | **2.19 μs** | **1.75 μs** | **6.21 μs** | **288 B** |
+| **torque** parse+get_many | 431.6K | 2.32 μs | 1.75 μs | 6.33 μs | 408 B |
+| **torque** parse+get | 415.5K | 2.41 μs | 1.96 μs | 7.13 μs | 432 B |
+| **simdjsone** parse+get | 353.8K | 2.83 μs | 1.71 μs | 7.25 μs | 408 B |
 
 Run benchmarks locally:
 
