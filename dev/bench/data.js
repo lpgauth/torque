@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774274543849,
+  "lastUpdate": 1774372714380,
   "repoUrl": "https://github.com/lpgauth/torque",
   "entries": {
     "Torque Benchmarks": [
@@ -1014,6 +1014,95 @@ window.BENCHMARK_DATA = {
           {
             "name": "encode map → binary (750 KB Twitter)",
             "value": 481.07943046503897,
+            "unit": "iterations/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "lpgauth@gmail.com",
+            "name": "Louis-Philippe Gauthier",
+            "username": "lpgauth"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "11b7f3583465c0f048f3b17670d1c00abfa1f93f",
+          "message": "Merge pull request #17 from lpgauth/feat/cpu-variant-builds\n\nAdd x86_64 CPU variant builds (SSE4.2, AVX2)",
+          "timestamp": "2026-03-24T13:12:33-04:00",
+          "tree_id": "e9445669252f959437868720c871ff4fe27735c7",
+          "url": "https://github.com/lpgauth/torque/commit/11b7f3583465c0f048f3b17670d1c00abfa1f93f"
+        },
+        "date": 1774372714028,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "decode (1.2 KB OpenRTB)",
+            "value": 181710.42028107055,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get_many_nil (1.2 KB OpenRTB)",
+            "value": 269164.6323127493,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get_many (1.2 KB OpenRTB)",
+            "value": 262926.76598797645,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse+get (1.2 KB OpenRTB)",
+            "value": 230691.160745739,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → binary (1.2 KB bid response)",
+            "value": 744104.0641022614,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → iodata (1.2 KB bid response)",
+            "value": 733742.1219566677,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → iodata (1.2 KB bid response)",
+            "value": 611578.4031853141,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → binary (1.2 KB bid response)",
+            "value": 608340.420037902,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "decode (750 KB Twitter)",
+            "value": 376.64561728327897,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → iodata (750 KB Twitter)",
+            "value": 548.1699953161046,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → iodata (750 KB Twitter)",
+            "value": 487.36233972162387,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist → binary (750 KB Twitter)",
+            "value": 487.0222542105595,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map → binary (750 KB Twitter)",
+            "value": 485.4447363390756,
             "unit": "iterations/s"
           }
         ]
