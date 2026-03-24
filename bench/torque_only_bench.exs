@@ -273,7 +273,37 @@ end
 
 large_decoded_proplist = to_proplist.(to_proplist, large_decoded_json)
 
-IO.puts("=== ENCODE BENCHMARK ===\n")
+IO.puts("=== DECODE BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "torque decode" => fn -> Torque.decode!(sample_json) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)
+
+IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "torque decode" => fn -> Torque.decode!(large_json) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)
+
+IO.puts("\n=== ENCODE BENCHMARK ===\n")
 
 Benchee.run(
   %{
@@ -299,36 +329,6 @@ Benchee.run(
     "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
     "torque [proplist() :: binary()]" => fn -> Torque.encode!(large_decoded_proplist) end,
     "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_proplist) end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
-)
-
-IO.puts("\n=== DECODE BENCHMARK ===\n")
-
-Benchee.run(
-  %{
-    "torque decode" => fn -> Torque.decode!(sample_json) end
-  },
-  warmup: 2,
-  time: 5,
-  memory_time: 2,
-  percentiles: [50, 95, 99],
-  formatters: [
-    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
-  ]
-)
-
-IO.puts("\n=== LARGE JSON DECODE BENCHMARK ===\n")
-
-Benchee.run(
-  %{
-    "torque decode" => fn -> Torque.decode!(large_json) end
   },
   warmup: 2,
   time: 5,
