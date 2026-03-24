@@ -30,7 +30,9 @@ defmodule Torque.CPU do
       {:ok, content} ->
         content
         |> String.split("\n")
-        |> Enum.any?(&(String.starts_with?(&1, "flags") and String.contains?(&1, flag)))
+        |> Enum.any?(fn line ->
+          String.starts_with?(line, "flags") and flag in String.split(line)
+        end)
 
       _ ->
         false
