@@ -13,6 +13,7 @@ defmodule Torque.MixProject do
       deps: deps(),
       package: package(),
       description: "High-performance JSON library for Elixir via Rustler NIFs (sonic-rs)",
+      docs: docs(),
       source_url: @source_url,
       homepage_url: @source_url
     ]
@@ -20,6 +21,19 @@ defmodule Torque.MixProject do
 
   def application do
     [extra_applications: [:logger]]
+  end
+
+  defp docs do
+    [
+      main: "Torque",
+      source_ref: "v#{@version}",
+      extras: ["README.md": [title: "Overview"], LICENSE: [title: "License"]],
+      groups_for_docs: [
+        Decoding: &(&1[:group] == :decode),
+        Encoding: &(&1[:group] == :encode),
+        "Parse + Get": &(&1[:group] == :parse_get)
+      ]
+    ]
   end
 
   defp deps do

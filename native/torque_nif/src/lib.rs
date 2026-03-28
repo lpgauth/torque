@@ -8,6 +8,7 @@ mod types;
 
 pub struct ParsedDocument {
     pub value: sonic_rs::Value,
+    pub unique_keys: bool,
 }
 
 #[rustler::resource_impl]

@@ -339,22 +339,35 @@ Benchee.run(
   ]
 )
 
-IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
+IO.puts("\n=== PARSE BENCHMARK ===\n")
 
 Benchee.run(
   %{
-    "torque parse+get" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      for f <- fields, do: Torque.get(doc, f)
-    end,
-    "torque parse+get_many" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      Torque.get_many(doc, fields)
-    end,
-    "torque parse+get_many_nil" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      Torque.get_many_nil(doc, fields)
-    end
+    "torque parse" => fn -> Torque.parse(sample_json) end,
+    "torque parse(unique_keys)" => fn -> Torque.parse(sample_json, unique_keys: true) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)
+
+{:ok, pre_doc} = Torque.parse(sample_json)
+{:ok, pre_doc_uk} = Torque.parse(sample_json, unique_keys: true)
+
+IO.puts("\n=== GET BENCHMARK ===\n")
+
+Benchee.run(
+  %{
+    "torque get" => fn -> for f <- fields, do: Torque.get(pre_doc, f) end,
+    "torque get_many" => fn -> Torque.get_many(pre_doc, fields) end,
+    "torque get_many_nil" => fn -> Torque.get_many_nil(pre_doc, fields) end,
+    "torque get (unique_keys)" => fn -> for f <- fields, do: Torque.get(pre_doc_uk, f) end,
+    "torque get_many (unique_keys)" => fn -> Torque.get_many(pre_doc_uk, fields) end,
+    "torque get_many_nil (unique_keys)" => fn -> Torque.get_many_nil(pre_doc_uk, fields) end
   },
   warmup: 2,
   time: 5,

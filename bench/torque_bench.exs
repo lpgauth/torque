@@ -399,27 +399,43 @@ Benchee.run(
     ] ++ ci_formatters
 )
 
-BenchGroup.set("Parse+Get (5 fields) — 1.2 KB OpenRTB")
-IO.puts("\n=== PARSE + GET BENCHMARK ===\n")
+{:ok, pre_doc} = Torque.parse(sample_json)
+{:ok, pre_doc_uk} = Torque.parse(sample_json, unique_keys: true)
+pre_ref = :simdjson.parse(sample_json)
+
+BenchGroup.set("Parse — 1.2 KB OpenRTB")
+IO.puts("\n=== PARSE BENCHMARK ===\n")
+
+# NOTE: simdjsone segfaults when Benchee measures memory (GC triggers a
+# use-after-free in the NIF resource destructor), so memory_time is 0 here.
+Benchee.run(
+  %{
+    "simdjsone parse" => fn -> :simdjson.parse(sample_json) end,
+    "torque parse" => fn -> Torque.parse(sample_json) end,
+    "torque parse(unique_keys)" => fn -> Torque.parse(sample_json, unique_keys: true) end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 0,
+  percentiles: [50, 95, 99],
+  formatters:
+    [
+      {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+    ] ++ ci_formatters
+)
+
+BenchGroup.set("Get (5 fields) — 1.2 KB OpenRTB")
+IO.puts("\n=== GET BENCHMARK ===\n")
 
 Benchee.run(
   %{
-    "simdjsone parse+get" => fn ->
-      ref = :simdjson.parse(sample_json)
-      for f <- fields, do: :simdjson.get(ref, f)
-    end,
-    "torque parse+get" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      for f <- fields, do: Torque.get(doc, f)
-    end,
-    "torque parse+get_many" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      Torque.get_many(doc, fields)
-    end,
-    "torque parse+get_many_nil" => fn ->
-      {:ok, doc} = Torque.parse(sample_json)
-      Torque.get_many_nil(doc, fields)
-    end
+    "simdjsone get" => fn -> for f <- fields, do: :simdjson.get(pre_ref, f) end,
+    "torque get" => fn -> for f <- fields, do: Torque.get(pre_doc, f) end,
+    "torque get_many" => fn -> Torque.get_many(pre_doc, fields) end,
+    "torque get_many_nil" => fn -> Torque.get_many_nil(pre_doc, fields) end,
+    "torque get (unique_keys)" => fn -> for f <- fields, do: Torque.get(pre_doc_uk, f) end,
+    "torque get_many (unique_keys)" => fn -> Torque.get_many(pre_doc_uk, fields) end,
+    "torque get_many_nil (unique_keys)" => fn -> Torque.get_many_nil(pre_doc_uk, fields) end
   },
   warmup: 2,
   time: 5,

@@ -71,6 +71,13 @@ results = Torque.get_many(doc, ["/id", "/site/domain", "/device/ip"])
 # [{:ok, "req-1"}, {:ok, "example.com"}, {:ok, "1.2.3.4"}]
 ```
 
+When your JSON is known to have no duplicate object keys, pass `unique_keys: true`
+for faster field lookups (uses sonic-rs internal indexing instead of linear scan):
+
+```elixir
+{:ok, doc} = Torque.parse(json, unique_keys: true)
+```
+
 ### Encoding
 
 ```elixir
@@ -94,7 +101,7 @@ json = Torque.encode_to_iodata(%{id: "abc"})
 |----------|-------------|
 | `Torque.decode(binary)` | Decode JSON to Elixir terms |
 | `Torque.decode!(binary)` | Decode JSON, raising on error |
-| `Torque.parse(binary)` | Parse JSON into opaque document reference |
+| `Torque.parse(binary, opts)` | Parse JSON into opaque document reference |
 | `Torque.get(doc, path)` | Extract field by JSON Pointer path |
 | `Torque.get(doc, path, default)` | Extract field with default for missing paths |
 | `Torque.get_many(doc, paths)` | Extract multiple fields in one NIF call |
@@ -118,7 +125,7 @@ json = Torque.encode_to_iodata(%{id: "abc"})
 | `true`, `false` | `true`, `false` |
 | `null` | `nil` |
 
-For objects with duplicate keys, the last value wins.
+For objects with duplicate keys, the last value wins (unless `unique_keys: true` is passed to `parse/2`).
 
 ### Elixir to JSON
 
@@ -165,62 +172,73 @@ Apple M2 Pro, OTP 28, Elixir 1.19:
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** | **257.2K** | **3.89 μs** | **3.67 μs** | **8.17 μs** | **1.56 KB** |
-| **simdjsone** | 170.0K | 5.88 μs | 5.13 μs | 14.75 μs | 1.59 KB |
-| **jiffy** | 146.1K | 6.85 μs | 6.00 μs | 17.08 μs | **1.56 KB** |
-| **otp json** | 127.2K | 7.86 μs | 7.29 μs | 18.00 μs | 7.73 KB |
-| **jason** | 107.7K | 9.29 μs | 8.71 μs | 18.08 μs | 9.54 KB |
+| **torque** | **262.5K** | **3.81 μs** | **3.63 μs** | **7.83 μs** | **1.56 KB** |
+| **simdjsone** | 182.7K | 5.47 μs | 5.13 μs | 11.88 μs | 1.59 KB |
+| **jiffy** | 144.6K | 6.92 μs | 6.21 μs | 17.17 μs | **1.56 KB** |
+| **otp json** | 129.6K | 7.72 μs | 7.21 μs | 16.50 μs | 7.73 KB |
+| **jason** | 103.6K | 9.65 μs | 8.71 μs | 22.75 μs | 9.54 KB |
 
 ### Decode (750 KB Twitter)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** | **505.0** | **1.98 ms** | **1.82 ms** | **2.58 ms** | **1.56 KB** |
-| **simdjsone** | 415.3 | 2.41 ms | 1.90 ms | 3.82 ms | **1.56 KB** |
-| **otp json** | 182.5 | 5.48 ms | 5.45 ms | 6.58 ms | 2.49 MB |
-| **jason** | 136.8 | 7.31 ms | 7.13 ms | 12.29 ms | 3.55 MB |
-| **jiffy** | 100.7 | 9.93 ms | 10.01 ms | 11.91 ms | 5.53 MB |
+| **torque** | **476.0** | **2.10 ms** | **1.87 ms** | **4.73 ms** | **1.56 KB** |
+| **simdjsone** | 459.4 | 2.18 ms | 1.85 ms | 3.20 ms | **1.56 KB** |
+| **otp json** | 195.1 | 5.13 ms | 5.12 ms | 6.16 ms | 2.49 MB |
+| **jason** | 142.0 | 7.04 ms | 6.91 ms | 11.47 ms | 3.55 MB |
+| **jiffy** | 115.9 | 8.63 ms | 8.72 ms | 9.94 ms | 5.53 MB |
 
 ### Encode (1.2 KB OpenRTB)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** [proplist() :: binary()] | **1274.3K** | **0.78 μs** | **0.71 μs** | **0.92 μs** | 88 B |
-| **torque** [proplist() :: iodata()] | 1261.4K | 0.79 μs | **0.71 μs** | 0.96 μs | **64 B** |
-| **otp json** [map() :: iodata()] | 1078.0K | 0.93 μs | 0.88 μs | 1.38 μs | 3928 B |
-| **torque** [map() :: iodata()] | 1064.8K | 0.94 μs | 0.88 μs | 1.13 μs | **64 B** |
-| **torque** [map() :: binary()] | 1053.1K | 0.95 μs | 0.88 μs | 1.17 μs | 88 B |
-| **jason** [map() :: iodata()] | 591.3K | 1.69 μs | 1.50 μs | 3.54 μs | 3848 B |
-| **jiffy** [proplist() :: iodata()] | 579.2K | 1.73 μs | 1.50 μs | 2.13 μs | 120 B |
-| **jiffy** [map() :: iodata()] | 498.1K | 2.01 μs | 1.83 μs | 2.50 μs | 824 B |
-| **simdjsone** [proplist() :: iodata()] | 441.6K | 2.26 μs | 2.00 μs | 3.71 μs | 184 B |
-| **jason** [map() :: binary()] | 399.7K | 2.50 μs | 2.33 μs | 4.21 μs | 3912 B |
-| **simdjsone** [map() :: iodata()] | 386.7K | 2.59 μs | 2.38 μs | 4.54 μs | 888 B |
+| **otp json** [map() :: iodata()] | **1091.6K** | **0.92 μs** | **0.83 μs** | 1.46 μs | 3928 B |
+| **torque** [proplist() :: binary()] | 1073.6K | 0.93 μs | 0.88 μs | **1.13 μs** | 88 B |
+| **torque** [proplist() :: iodata()] | 1069.3K | 0.94 μs | 0.88 μs | 1.17 μs | **64 B** |
+| **torque** [map() :: binary()] | 917.5K | 1.09 μs | 1.00 μs | 1.33 μs | 88 B |
+| **torque** [map() :: iodata()] | 914.6K | 1.09 μs | 1.00 μs | 1.42 μs | **64 B** |
+| **jason** [map() :: iodata()] | 571.8K | 1.75 μs | 1.54 μs | 3.75 μs | 3848 B |
+| **jiffy** [proplist() :: iodata()] | 518.4K | 1.93 μs | 1.67 μs | 2.75 μs | 120 B |
+| **jiffy** [map() :: iodata()] | 427.6K | 2.34 μs | 2.08 μs | 4.33 μs | 824 B |
+| **simdjsone** [proplist() :: iodata()] | 415.4K | 2.41 μs | 2.21 μs | 3.96 μs | 184 B |
+| **jason** [map() :: binary()] | 385.1K | 2.60 μs | 2.38 μs | 5.00 μs | 3912 B |
+| **simdjsone** [map() :: iodata()] | 346.8K | 2.88 μs | 2.67 μs | 4.33 μs | 888 B |
 
 ### Encode (750 KB Twitter)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** [proplist() :: iodata()] | **1272.5** | **0.79 ms** | **0.76 ms** | **0.99 ms** | **64 B** |
-| **torque** [proplist() :: binary()] | 1252.1 | 0.80 ms | 0.77 ms | 1.04 ms | 88 B |
-| **torque** [map() :: iodata()] | 1102.9 | 0.91 ms | 0.89 ms | 1.09 ms | **64 B** |
-| **torque** [map() :: binary()] | 1084.0 | 0.92 ms | 0.89 ms | 1.20 ms | 88 B |
-| **jiffy** [proplist() :: iodata()] | 342.0 | 2.92 ms | 2.82 ms | 4.75 ms | 37.7 KB |
-| **jiffy** [map() :: iodata()] | 287.1 | 3.48 ms | 3.32 ms | 4.29 ms | 1.06 MB |
-| **simdjsone** [proplist() :: iodata()] | 259.7 | 3.85 ms | 3.78 ms | 5.79 ms | 37.7 KB |
-| **jason** [map() :: iodata()] | 241.3 | 4.14 ms | 3.94 ms | 6.99 ms | 4.96 MB |
-| **simdjsone** [map() :: iodata()] | 216.1 | 4.63 ms | 4.66 ms | 6.51 ms | 1.06 MB |
-| **otp json** [map() :: iodata()] | 200.2 | 4.99 ms | 5.10 ms | 6.97 ms | 5.40 MB |
-| **jason** [map() :: binary()] | 130.9 | 7.64 ms | 7.53 ms | 9.09 ms | 4.96 MB |
+| **torque** [proplist() :: iodata()] | **1026.4** | **0.97 ms** | **0.96 ms** | **1.18 ms** | **64 B** |
+| **torque** [proplist() :: binary()] | 983.5 | 1.02 ms | 0.98 ms | 1.69 ms | 88 B |
+| **torque** [map() :: binary()] | 918.5 | 1.09 ms | 1.08 ms | 1.31 ms | 88 B |
+| **torque** [map() :: iodata()] | 905.4 | 1.10 ms | 1.09 ms | 1.35 ms | **64 B** |
+| **jiffy** [proplist() :: iodata()] | 342.6 | 2.92 ms | 2.86 ms | 4.35 ms | 37.7 KB |
+| **jiffy** [map() :: iodata()] | 270.8 | 3.69 ms | 3.53 ms | 5.94 ms | 1.06 MB |
+| **jason** [map() :: iodata()] | 254.9 | 3.92 ms | 3.70 ms | 6.50 ms | 4.96 MB |
+| **simdjsone** [proplist() :: iodata()] | 247.4 | 4.04 ms | 3.98 ms | 5.63 ms | 37.7 KB |
+| **otp json** [map() :: iodata()] | 246.9 | 4.05 ms | 4.13 ms | 5.64 ms | 5.40 MB |
+| **simdjsone** [map() :: iodata()] | 210.5 | 4.75 ms | 4.78 ms | 5.41 ms | 1.06 MB |
+| **jason** [map() :: binary()] | 141.1 | 7.09 ms | 7.02 ms | 8.40 ms | 4.96 MB |
 
-### Parse + Get (5 fields) (1.2 KB OpenRTB)
+### Parse (1.2 KB OpenRTB)
+
+| Library | ips | mean | median | p99 |
+|---|---|---|---|---|
+| **torque** parse(unique_keys) | **596.6K** | **1.68 μs** | **1.33 μs** | **3.13 μs** |
+| **torque** parse | 579.2K | 1.73 μs | **1.33 μs** | 3.88 μs |
+| **simdjsone** parse | 364.9K | 2.74 μs | 1.17 μs | 4.92 μs |
+
+### Get (5 fields) (1.2 KB OpenRTB)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** parse+get_many_nil | **455.8K** | **2.19 μs** | **1.75 μs** | **6.21 μs** | **288 B** |
-| **torque** parse+get_many | 431.6K | 2.32 μs | 1.75 μs | 6.33 μs | 408 B |
-| **torque** parse+get | 415.5K | 2.41 μs | 1.96 μs | 7.13 μs | 432 B |
-| **simdjsone** parse+get | 353.8K | 2.83 μs | 1.71 μs | 7.25 μs | 408 B |
+| **torque** get_many_nil (unique_keys) | **2.49M** | **402 ns** | **375 ns** | **500 ns** | **240 B** |
+| **torque** get_many (unique_keys) | 2.37M | 422 ns | **375 ns** | **500 ns** | 360 B |
+| **torque** get_many_nil | 2.16M | 463 ns | 458 ns | 583 ns | **240 B** |
+| **torque** get_many | 2.07M | 483 ns | 458 ns | 584 ns | 360 B |
+| **simdjsone** get | 1.77M | 564 ns | 458 ns | 1083 ns | 384 B |
+| **torque** get (unique_keys) | 1.67M | 601 ns | 583 ns | 709 ns | 384 B |
+| **torque** get | 1.50M | 669 ns | 625 ns | 792 ns | 384 B |
 
 Run benchmarks locally:
 

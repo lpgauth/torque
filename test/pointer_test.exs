@@ -258,6 +258,37 @@ defmodule Torque.PointerTest do
     end
   end
 
+  describe "parse/2 unique_keys" do
+    test "uses fast lookup path" do
+      {:ok, doc} = Torque.parse(~s({"a":1,"b":2}), unique_keys: true)
+      assert {:ok, 1} = Torque.get(doc, "/a")
+      assert {:ok, 2} = Torque.get(doc, "/b")
+      assert {:error, :no_such_field} = Torque.get(doc, "/c")
+    end
+
+    test "nested objects" do
+      {:ok, doc} = Torque.parse(~s({"x":{"y":"z"}}), unique_keys: true)
+      assert {:ok, "z"} = Torque.get(doc, "/x/y")
+    end
+
+    test "get_many" do
+      {:ok, doc} = Torque.parse(~s({"a":1,"b":2}), unique_keys: true)
+      assert [{:ok, 1}, {:ok, 2}] = Torque.get_many(doc, ["/a", "/b"])
+    end
+
+    test "get_many_nil" do
+      {:ok, doc} = Torque.parse(~s({"a":1,"b":2}), unique_keys: true)
+      assert [1, 2, nil] = Torque.get_many_nil(doc, ["/a", "/b", "/c"])
+    end
+
+    test "dirty scheduler for large payload" do
+      large_map = Map.new(1..500, fn i -> {"key_#{i}", String.duplicate("v", 20)} end)
+      json = Jason.encode!(large_map)
+      {:ok, doc} = Torque.parse(json, unique_keys: true)
+      assert {:ok, _} = Torque.get(doc, "/key_1")
+    end
+  end
+
   describe "duplicate keys" do
     test "parse + get on object with duplicate keys - last value wins" do
       {:ok, doc} = Torque.parse(~s({"a":1,"b":2,"a":3}))
