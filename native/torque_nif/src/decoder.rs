@@ -18,19 +18,34 @@ fn timeslice_percent(bytes: usize) -> i32 {
     ((reds * 100 / REDUCTION_COUNT) as i32).clamp(1, 100)
 }
 
-/// Returns the last value for `key` in an object, matching the last-value-wins
-/// behaviour of `value_to_term` / `build_map_dedup` for duplicate keys.
+/// Looks up `key` in an object.
+///
+/// When `unique_keys` is true, uses sonic-rs's internal index (fast).
+/// Otherwise, does a reverse linear scan so that the last value wins,
+/// matching the duplicate-key behaviour of `value_to_term` / `build_map_dedup`.
 #[inline]
-fn object_get_last<'v>(value: &'v sonic_rs::Value, key: &str) -> Option<&'v sonic_rs::Value> {
-    value
-        .as_object()?
-        .iter()
-        .rfind(|(k, _)| *k == key)
-        .map(|(_, v)| v)
+fn object_get<'v>(
+    value: &'v sonic_rs::Value,
+    key: &str,
+    unique_keys: bool,
+) -> Option<&'v sonic_rs::Value> {
+    if unique_keys {
+        value.get(key)
+    } else {
+        value
+            .as_object()?
+            .iter()
+            .rfind(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+    }
 }
 
 #[inline]
-fn pointer_lookup<'v>(value: &'v sonic_rs::Value, path: &str) -> Option<&'v sonic_rs::Value> {
+fn pointer_lookup<'v>(
+    value: &'v sonic_rs::Value,
+    path: &str,
+    unique_keys: bool,
+) -> Option<&'v sonic_rs::Value> {
     let bytes = path.as_bytes();
     if bytes.is_empty() {
         return Some(value);
@@ -54,7 +69,7 @@ fn pointer_lookup<'v>(value: &'v sonic_rs::Value, path: &str) -> Option<&'v soni
         if segment.contains('~') {
             if segment.len() > 512 {
                 let unescaped = segment.replace("~1", "/").replace("~0", "~");
-                current = object_get_last(current, &unescaped)?;
+                current = object_get(current, &unescaped, unique_keys)?;
             } else {
                 let bytes = segment.as_bytes();
                 let mut tmp = [0u8; 512];
@@ -87,25 +102,25 @@ fn pointer_lookup<'v>(value: &'v sonic_rs::Value, path: &str) -> Option<&'v soni
                 }
                 // SAFETY: input is valid UTF-8 &str; substitutions write only ASCII bytes
                 let unescaped = unsafe { std::str::from_utf8_unchecked(&tmp[..out_len]) };
-                current = object_get_last(current, unescaped)?;
+                current = object_get(current, unescaped, unique_keys)?;
             }
         } else {
-            current = object_get_last(current, segment)?;
+            current = object_get(current, segment, unique_keys)?;
         }
     }
     Some(current)
 }
 
-fn do_parse(bytes: &[u8]) -> Result<ResourceArc<ParsedDocument>, String> {
+fn do_parse(bytes: &[u8], unique_keys: bool) -> Result<ResourceArc<ParsedDocument>, String> {
     match sonic_rs::from_slice::<sonic_rs::Value>(bytes) {
-        Ok(value) => Ok(ResourceArc::new(ParsedDocument { value })),
+        Ok(value) => Ok(ResourceArc::new(ParsedDocument { value, unique_keys })),
         Err(e) => Err(format!("{}", e)),
     }
 }
 
 #[rustler::nif]
 fn parse<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
-    match do_parse(json.as_slice()) {
+    match do_parse(json.as_slice(), false) {
         Ok(resource) => {
             schedule::consume_timeslice(env, timeslice_percent(json.len()));
             make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg())
@@ -120,7 +135,34 @@ fn parse<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_dirty<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
-    match do_parse(json.as_slice()) {
+    match do_parse(json.as_slice(), false) {
+        Ok(resource) => make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg()),
+        Err(reason) => make_tuple2(
+            env,
+            atoms::error().as_c_arg(),
+            reason.encode(env).as_c_arg(),
+        ),
+    }
+}
+
+#[rustler::nif]
+fn parse_opts<'a>(env: Env<'a>, json: Binary, unique_keys: bool) -> Term<'a> {
+    match do_parse(json.as_slice(), unique_keys) {
+        Ok(resource) => {
+            schedule::consume_timeslice(env, timeslice_percent(json.len()));
+            make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg())
+        }
+        Err(reason) => make_tuple2(
+            env,
+            atoms::error().as_c_arg(),
+            reason.encode(env).as_c_arg(),
+        ),
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn parse_opts_dirty<'a>(env: Env<'a>, json: Binary, unique_keys: bool) -> Term<'a> {
+    match do_parse(json.as_slice(), unique_keys) {
         Ok(resource) => make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg()),
         Err(reason) => make_tuple2(
             env,
@@ -136,7 +178,7 @@ fn get<'a>(env: Env<'a>, doc: ResourceArc<ParsedDocument>, path: &str) -> Term<'
     let err_raw = atoms::error().as_c_arg();
     let nsf_raw = atoms::no_such_field().as_c_arg();
     let ntd_raw = atoms::nesting_too_deep().as_c_arg();
-    match pointer_lookup(&doc.value, path) {
+    match pointer_lookup(&doc.value, path, doc.unique_keys) {
         Some(value) => match value_to_term(env, value, MAX_DEPTH) {
             Some(term) => make_tuple2(env, ok_raw, term.as_c_arg()),
             None => make_tuple2(env, err_raw, ntd_raw),
@@ -155,7 +197,7 @@ fn get_one_result(
     nsf_raw: ERL_NIF_TERM,
     ntd_raw: ERL_NIF_TERM,
 ) -> ERL_NIF_TERM {
-    match pointer_lookup(&doc.value, path) {
+    match pointer_lookup(&doc.value, path, doc.unique_keys) {
         Some(value) => match value_to_term(env, value, MAX_DEPTH) {
             Some(term) => make_tuple2(env, ok_raw, term.as_c_arg()).as_c_arg(),
             None => make_tuple2(env, err_raw, ntd_raw).as_c_arg(),
@@ -229,7 +271,7 @@ fn get_many<'a>(
 
 #[rustler::nif]
 fn array_length<'a>(env: Env<'a>, doc: ResourceArc<ParsedDocument>, path: &str) -> Term<'a> {
-    match pointer_lookup(&doc.value, path) {
+    match pointer_lookup(&doc.value, path, doc.unique_keys) {
         Some(value) if value.is_array() => {
             let len = value.as_array().unwrap().len();
             unsafe {
@@ -288,7 +330,7 @@ fn get_many_nil<'a>(
             }
         };
 
-        let r = match pointer_lookup(&doc.value, path) {
+        let r = match pointer_lookup(&doc.value, path, doc.unique_keys) {
             Some(value) => match value_to_term(env, value, MAX_DEPTH) {
                 Some(term) => term.as_c_arg(),
                 None => nil_raw,

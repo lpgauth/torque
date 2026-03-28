@@ -31,15 +31,31 @@ defmodule Torque do
   The returned reference can be passed to `get/2`, `get/3`, or `get_many/2`
   for efficient repeated field extraction without re-parsing.
 
-  Automatically uses a dirty CPU scheduler for inputs larger than 10 KB.
+  ## Options
+
+    * `:unique_keys` — when `true`, assumes object keys are unique and uses
+      a faster lookup path. Defaults to `false` (last-value-wins for
+      duplicate keys).
+
+  Automatically uses a dirty CPU scheduler for inputs larger than 20 KB.
   """
-  @spec parse(binary()) :: {:ok, reference()} | {:error, binary()}
-  def parse(json) when is_binary(json) and byte_size(json) > @timeslice_bytes do
+  @spec parse(binary(), keyword()) :: {:ok, reference()} | {:error, binary()}
+  def parse(json, opts \\ [])
+
+  def parse(json, []) when is_binary(json) and byte_size(json) > @timeslice_bytes do
     Torque.Native.parse_dirty(json)
   end
 
-  def parse(json) when is_binary(json) do
+  def parse(json, []) when is_binary(json) do
     Torque.Native.parse(json)
+  end
+
+  def parse(json, opts) when is_binary(json) and byte_size(json) > @timeslice_bytes do
+    Torque.Native.parse_opts_dirty(json, Keyword.get(opts, :unique_keys, false))
+  end
+
+  def parse(json, opts) when is_binary(json) do
+    Torque.Native.parse_opts(json, Keyword.get(opts, :unique_keys, false))
   end
 
   @doc """
