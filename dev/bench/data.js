@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774704776310,
+  "lastUpdate": 1778786914542,
   "repoUrl": "https://github.com/lpgauth/torque",
   "entries": {
     "Torque Benchmarks": [
@@ -1801,6 +1801,120 @@ window.BENCHMARK_DATA = {
           {
             "name": "get (1.2 KB OpenRTB)",
             "value": 1126017.6061793305,
+            "unit": "iterations/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "lpgauth@gmail.com",
+            "name": "Louis-Philippe Gauthier",
+            "username": "lpgauth"
+          },
+          "committer": {
+            "email": "lpgauth@gmail.com",
+            "name": "Louis-Philippe Gauthier",
+            "username": "lpgauth"
+          },
+          "distinct": true,
+          "id": "3231989208d852fc80ede6489194ba390a68b2cf",
+          "message": "Add Torque.get_many_defaults/3 for 0.1.9\n\nVariant of get_many_nil/2 that takes %{path => default} and returns\n%{path => value_or_default}. Saves callers from the awkward two-call\npattern:\n\n  paths = Map.keys(defaults)\n  values = Torque.get_many_nil(doc, paths)\n  Enum.zip(paths, values)\n  |> Map.new(fn {p, nil} -> {p, Map.get(defaults, p)}; pv -> pv end)\n\nNow a single call:\n\n  Torque.get_many_defaults(doc, %{\n    \"/user/id\" => 0,\n    \"/user/name\" => \"anonymous\",\n    \"/created_at\" => nil\n  })\n\nReturns a same-shape map with parsed values, falling back to the\nprovided defaults for missing/null fields. Same nil/missing\nindistinguishability semantics as get_many_nil/2.\n\nPure-Elixir wrapper around the existing NIF (get_many_nil/2); no\nnew Rust code, no NIF dispatch overhead beyond the one\nget_many_nil call. Has an embedded doctest exercised by the test\nsuite.\n\nD1's two other plan items resolved on inspection:\n\n- 'aarch64 baseline variant in release matrix' -- aarch64 v8 is\n  universal across consumer CPUs, no v2 distinction needed. The\n  matrix already ships aarch64-apple-darwin + aarch64-linux-gnu.\n\n- 'property test for float round-trip precision' -- already\n  covered by test/property_test.exs (35 properties, 626 lines)\n  with a json_scalar generator that includes float(-1000..1000),\n  encoded/decoded through the round-trip suite.\n\nREADME and mix.exs version both bumped to 0.1.9.",
+          "timestamp": "2026-05-14T15:22:17-04:00",
+          "tree_id": "92fd7d6da0fa54185fc477895ca842c6102eea6f",
+          "url": "https://github.com/lpgauth/torque/commit/3231989208d852fc80ede6489194ba390a68b2cf"
+        },
+        "date": 1778786913971,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "decode (1.2 KB OpenRTB)",
+            "value": 174455.57389127006,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "decode (750 KB Twitter)",
+            "value": 348.0379928018006,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
+            "value": 902052.9191852746,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
+            "value": 898034.7711501936,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
+            "value": 740165.6013653142,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
+            "value": 731815.9401561847,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: iodata (750 KB Twitter)",
+            "value": 666.823962607419,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: binary (750 KB Twitter)",
+            "value": 666.3142524041424,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: binary (750 KB Twitter)",
+            "value": 539.0415974956688,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: iodata (750 KB Twitter)",
+            "value": 532.1419500888924,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse (1.2 KB OpenRTB)",
+            "value": 294440.7171128634,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parseunique_keys (1.2 KB OpenRTB)",
+            "value": 289148.7536334346,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get_many_nil unique_keys (1.2 KB OpenRTB)",
+            "value": 1929482.1842680685,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get_many_nil (1.2 KB OpenRTB)",
+            "value": 1696007.667148645,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get_many unique_keys (1.2 KB OpenRTB)",
+            "value": 1661534.7700683197,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get_many (1.2 KB OpenRTB)",
+            "value": 1486576.7994421613,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get unique_keys (1.2 KB OpenRTB)",
+            "value": 1232401.221212004,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get (1.2 KB OpenRTB)",
+            "value": 1093518.347364672,
             "unit": "iterations/s"
           }
         ]
