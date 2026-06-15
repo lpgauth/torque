@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781530840287,
+  "lastUpdate": 1781534168466,
   "repoUrl": "https://github.com/lpgauth/torque",
   "entries": {
     "Torque Benchmarks": [
@@ -2371,6 +2371,120 @@ window.BENCHMARK_DATA = {
           {
             "name": "get (1.2 KB OpenRTB)",
             "value": 1188576.9506320225,
+            "unit": "iterations/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "lpgauth@gmail.com",
+            "name": "Louis-Philippe Gauthier",
+            "username": "lpgauth"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2c0c4f1aca9cf1e59c972c0a6e7d14600c9bd871",
+          "message": "Merge pull request #25 from lpgauth/bench/add-glazer\n\nAdd glazer to comparison benchmark",
+          "timestamp": "2026-06-15T10:28:23-04:00",
+          "tree_id": "ef521d86d4dd28f417244f41fac896ad3e295829",
+          "url": "https://github.com/lpgauth/torque/commit/2c0c4f1aca9cf1e59c972c0a6e7d14600c9bd871"
+        },
+        "date": 1781534167442,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "decode (1.2 KB OpenRTB)",
+            "value": 193625.4404017151,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "decode (750 KB Twitter)",
+            "value": 352.89093674780327,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
+            "value": 796157.3814294556,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
+            "value": 782615.7108832992,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
+            "value": 660403.6585678507,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
+            "value": 656702.3295871575,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: binary (750 KB Twitter)",
+            "value": 450.674744020209,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: binary (750 KB Twitter)",
+            "value": 428.07444198520875,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: iodata (750 KB Twitter)",
+            "value": 424.69368659850994,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: iodata (750 KB Twitter)",
+            "value": 396.60585073672473,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parseunique_keys (1.2 KB OpenRTB)",
+            "value": 274100.6785722192,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse (1.2 KB OpenRTB)",
+            "value": 253280.255446835,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get_many_nil unique_keys (1.2 KB OpenRTB)",
+            "value": 1708759.0203060498,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get_many unique_keys (1.2 KB OpenRTB)",
+            "value": 1644624.664096308,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get_many_nil (1.2 KB OpenRTB)",
+            "value": 1495135.2179882552,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get_many (1.2 KB OpenRTB)",
+            "value": 1398009.7921414995,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get unique_keys (1.2 KB OpenRTB)",
+            "value": 1266516.7863102646,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "get (1.2 KB OpenRTB)",
+            "value": 1087528.364248685,
             "unit": "iterations/s"
           }
         ]
