@@ -108,7 +108,10 @@
     </p>
 
     <h2>Library Comparison</h2>
-    <p class="section-desc">Latest CI results — all libraries, sorted by throughput (higher is better).</p>
+    <p class="section-desc">Latest CI results — all libraries, sorted by throughput (higher is better).
+      glazer runs with UTF-8 validation enabled (<code>validate_utf8</code> on decode,
+      <code>force_utf8</code> on encode; both default off in glazer) so all libraries
+      provide the same guarantee Torque always does: JSON strings are valid UTF-8.</p>
     <div id="comparison"><div class="empty">Loading...</div></div>
 
     <h2>Performance Over Time</h2>
