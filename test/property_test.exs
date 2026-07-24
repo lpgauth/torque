@@ -546,8 +546,8 @@ defmodule Torque.PropertyTest do
       assert {:error, :unsupported_type} = Torque.encode({"not_a_list"})
     end
 
-    test "integer map key returns invalid_key" do
-      assert {:error, :invalid_key} = Torque.encode(%{42 => "v"})
+    test "integer map key is stringified" do
+      assert {:ok, "{\"42\":\"v\"}"} = Torque.encode(%{42 => "v"})
     end
 
     test "proplist item not a tuple returns malformed_proplist" do

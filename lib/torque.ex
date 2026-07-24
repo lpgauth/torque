@@ -212,6 +212,23 @@ defmodule Torque do
     :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
   end
 
+  @doc """
+  Encodes an Elixir term into a JSON binary (iodata-compatible), raising on error.
+
+  Single-argument raising variant that satisfies Phoenix's `:json_library`
+  contract alongside `encode!/1` and `decode!/1`.
+
+  ## Examples
+
+      iex> Torque.encode_to_iodata!(%{ok: true})
+      ~s({"ok":true})
+  """
+  @doc group: :encode
+  @spec encode_to_iodata!(term()) :: binary()
+  def encode_to_iodata!(term) do
+    encode_to_iodata(term)
+  end
+
   # --- Parse + Get ---
 
   @doc """

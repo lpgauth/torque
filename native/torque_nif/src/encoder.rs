@@ -261,10 +261,39 @@ fn encode_map_key(
                     .map_err(|_| EncodeError::InvalidUtf8)?;
             }
         }
+        TermType::Integer => {
+            write_integer_key(env_raw, key, buf)?;
+        }
         _ => return Err(EncodeError::InvalidKey),
     }
     buf.push(b'"');
     Ok(())
+}
+
+#[inline]
+fn write_integer_key(
+    env_raw: *mut ErlNifEnv,
+    term: Term,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let mut n: i64 = 0;
+    if unsafe { enif_get_int64(env_raw, term.as_c_arg(), &mut n) } != 0 {
+        let mut itoa_buf = itoa::Buffer::new();
+        buf.extend_from_slice(itoa_buf.format(n).as_bytes());
+        return Ok(());
+    }
+    let mut u: u64 = 0;
+    if unsafe { enif_get_uint64(env_raw, term.as_c_arg(), &mut u) } != 0 {
+        let mut itoa_buf = itoa::Buffer::new();
+        buf.extend_from_slice(itoa_buf.format(u).as_bytes());
+        return Ok(());
+    }
+    if let Ok(big) = term.decode::<rustler::BigInt>() {
+        use std::io::Write;
+        let _ = write!(buf, "{}", big);
+        return Ok(());
+    }
+    Err(EncodeError::InvalidKey)
 }
 
 fn encode_list(

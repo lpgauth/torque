@@ -226,5 +226,38 @@ defmodule Torque.EncodeTest do
         Torque.encode_to_iodata(<<0x80>>)
       end
     end
+
+    test "integer keys are stringified" do
+      json = Torque.encode_to_iodata(%{0 => "a", 1 => "b"})
+      assert %{"0" => "a", "1" => "b"} = Jason.decode!(json)
+    end
+
+    test "negative integer keys are stringified" do
+      json = Torque.encode_to_iodata(%{-1 => "x"})
+      assert %{"-1" => "x"} = Jason.decode!(json)
+    end
+  end
+
+  describe "encode_to_iodata!/1" do
+    test "returns binary directly" do
+      json = Torque.encode_to_iodata!(%{a: 1})
+      assert is_binary(json)
+      assert %{"a" => 1} = Jason.decode!(json)
+    end
+
+    test "encodes list" do
+      assert "[1,2,3]" = Torque.encode_to_iodata!([1, 2, 3])
+    end
+
+    test "unsupported term raises ArgumentError" do
+      assert_raise ArgumentError, ~r/unsupported_type/, fn ->
+        Torque.encode_to_iodata!(self())
+      end
+    end
+
+    test "matches encode_to_iodata/1 output" do
+      term = %{nested: %{list: [1, 2, 3], str: "hello"}}
+      assert Torque.encode_to_iodata!(term) == Torque.encode_to_iodata(term)
+    end
   end
 end
