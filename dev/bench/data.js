@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785871511270,
+  "lastUpdate": 1785932482868,
   "repoUrl": "https://github.com/lpgauth/torque",
   "entries": {
     "Torque Benchmarks": [
@@ -6178,6 +6178,105 @@ window.BENCHMARK_DATA = {
           {
             "name": "parse + get x5 (1.2 KB OpenRTB)",
             "value": 269546.5528558891,
+            "unit": "iterations/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "lpgauth@gmail.com",
+            "name": "Louis-Philippe Gauthier",
+            "username": "lpgauth"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0563af197a2dbfb06d1a5010fd33c5359b48c8ac",
+          "message": "Merge pull request #49 from lpgauth/fix-source-build-packaging\n\nShip vendored sonic-rs in the Hex package",
+          "timestamp": "2026-08-05T08:14:40-04:00",
+          "tree_id": "9b71d822049c0e5accf57c89f69c26d4f22d6d6e",
+          "url": "https://github.com/lpgauth/torque/commit/0563af197a2dbfb06d1a5010fd33c5359b48c8ac"
+        },
+        "date": 1785932482519,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "decode (1.2 KB OpenRTB)",
+            "value": 252540.8400984241,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "decode (750 KB Twitter)",
+            "value": 502.9283388628817,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: iodata (1.2 KB OpenRTB)",
+            "value": 747306.0373999096,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: binary (1.2 KB OpenRTB)",
+            "value": 736237.6272791136,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: iodata (1.2 KB OpenRTB)",
+            "value": 642517.6774539311,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: binary (1.2 KB OpenRTB)",
+            "value": 617265.0855483639,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: binary (750 KB Twitter)",
+            "value": 634.6046581453373,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode proplist :: iodata (750 KB Twitter)",
+            "value": 631.5505703172171,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: binary (750 KB Twitter)",
+            "value": 534.7241391678882,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "encode map :: iodata (750 KB Twitter)",
+            "value": 532.712473768007,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parseunique_keys (1.2 KB OpenRTB)",
+            "value": 324054.38187438576,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse (1.2 KB OpenRTB)",
+            "value": 315699.207571059,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse + get_many (1.2 KB OpenRTB)",
+            "value": 281169.8041246221,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parseunique_keys + get_many (1.2 KB OpenRTB)",
+            "value": 272639.81822627835,
+            "unit": "iterations/s"
+          },
+          {
+            "name": "parse + get x5 (1.2 KB OpenRTB)",
+            "value": 259771.073042741,
             "unit": "iterations/s"
           }
         ]
