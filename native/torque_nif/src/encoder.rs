@@ -3,8 +3,8 @@ use crate::nif_util::{make_tuple2, timeslice_percent};
 use crate::types::MAX_DEPTH;
 use rustler::sys::{
     c_int, c_uint, enif_get_atom, enif_get_atom_length, enif_get_double, enif_get_int64,
-    enif_get_list_cell, enif_get_tuple, enif_get_uint64, enif_inspect_binary, enif_is_empty_list,
-    ErlNifBinary, ErlNifCharEncoding, ErlNifEnv, ERL_NIF_TERM,
+    enif_get_list_cell, enif_get_map_value, enif_get_tuple, enif_get_uint64, enif_inspect_binary,
+    enif_is_empty_list, ErlNifBinary, ErlNifCharEncoding, ErlNifEnv, ERL_NIF_TERM,
 };
 use rustler::{schedule, Env, MapIterator, NewBinary, Term, TermType};
 use std::cell::RefCell;
@@ -35,6 +35,7 @@ enum EncodeError {
     MalformedProplist,
     DepthExceeded,
     InvalidUtf8,
+    UnhandledStruct,
 }
 
 #[inline]
@@ -46,6 +47,7 @@ fn error_reason(e: EncodeError) -> ERL_NIF_TERM {
         EncodeError::InvalidKey => atoms::invalid_key().as_c_arg(),
         EncodeError::MalformedProplist => atoms::malformed_proplist().as_c_arg(),
         EncodeError::InvalidUtf8 => atoms::invalid_utf8().as_c_arg(),
+        EncodeError::UnhandledStruct => atoms::unhandled_struct().as_c_arg(),
     }
 }
 
@@ -222,6 +224,13 @@ fn encode_map(
     if depth == 0 {
         return Err(EncodeError::DepthExceeded);
     }
+    // Elixir structs (maps carrying an atom `__struct__` key) are not
+    // encodable as-is: they must opt into Torque.Encoder. The Elixir layer
+    // normalizes them through the protocol and retries once, so failing
+    // here on any struct keeps that fast path (no struct) at zero cost.
+    if unsafe { is_struct(env_raw, term.as_c_arg()) } {
+        return Err(EncodeError::UnhandledStruct);
+    }
     let iter = MapIterator::new(term).ok_or(EncodeError::UnsupportedType)?;
     buf.push(b'{');
     let mut first = true;
@@ -236,6 +245,15 @@ fn encode_map(
     }
     buf.push(b'}');
     Ok(())
+}
+
+/// A map with an atom `__struct__` key is an Elixir struct.
+///
+/// Plain maps that merely use a binary `"__struct__"` key are unaffected.
+#[inline]
+unsafe fn is_struct(env_raw: *mut ErlNifEnv, map: ERL_NIF_TERM) -> bool {
+    let mut value = MaybeUninit::uninit();
+    enif_get_map_value(env_raw, map, atoms::__struct__().as_c_arg(), value.as_mut_ptr()) == 1
 }
 
 #[inline]

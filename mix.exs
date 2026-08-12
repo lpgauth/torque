@@ -10,6 +10,10 @@ defmodule Torque.MixProject do
       version: @version,
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
+      # Keep the protocol open in test so this repo's own tests can
+      # implement Torque.Encoder for local structs. Host projects
+      # consolidate it (with their own implementations) at build time.
+      consolidate_protocols: Mix.env() != :test,
       deps: deps(),
       package: package(),
       description: "High-performance JSON library for Elixir via Rustler NIFs (sonic-rs)",

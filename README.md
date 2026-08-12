@@ -118,6 +118,20 @@ json = Torque.encode_to_iodata(%{id: "abc"})
 {:ok, json} = Torque.encode({[{:id, "abc"}, {:price, 1.5}]})
 ```
 
+Structs are rejected with `{:error, :unhandled_struct}` unless they implement
+`Torque.Encoder`. Implement the protocol for custom types, or derive it to
+encode a subset of fields:
+
+```elixir
+defimpl Torque.Encoder, for: Decimal do
+  def encode(decimal), do: Decimal.to_string(decimal)
+end
+
+# or, on the struct itself:
+@derive {Torque.Encoder, only: [:id, :name]}
+defstruct [:id, :name, :secret]
+```
+
 Unlike decoding, encoding cannot cheaply predict its output size, so dirty
 scheduler dispatch is opt-in. Pass `dirty: true` (accepted by `encode/2`,
 `encode!/2`, `encode_to_iodata/2`, and `encode_to_iodata!/2`) when terms are
