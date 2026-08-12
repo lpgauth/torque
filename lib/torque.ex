@@ -24,6 +24,10 @@ defmodule Torque do
   binary, or integer keys), lists, binaries, numbers, booleans, `nil`,
   and jiffy-style `{proplist}` tuples.
 
+  Structs are rejected with `{:error, :unhandled_struct}` unless they
+  implement `Torque.Encoder` (see the protocol docs for deriving with
+  `:only` / `:except`).
+
   ## Scheduler awareness
 
   Decoding and parsing automatically dispatch inputs larger than 20 KB to a
@@ -125,6 +129,8 @@ defmodule Torque do
     * `true`, `false`, `nil` (JSON `null`)
     * Other atoms (encoded as JSON strings)
     * `{keyword_list}` tuples (jiffy-style proplist objects)
+    * Structs implementing `Torque.Encoder` (any other struct fails
+      with `{:error, :unhandled_struct}`)
 
   ## Options
 
@@ -146,18 +152,24 @@ defmodule Torque do
       {:ok, ~s({"id":"abc"})}
   """
   @doc group: :encode
-  @spec encode(term(), keyword()) :: {:ok, binary()} | {:error, binary() | :nesting_too_deep}
+  @spec encode(term(), keyword()) ::
+          {:ok, binary()}
+          | {:error, binary() | :nesting_too_deep | :unhandled_struct}
   def encode(term, opts \\ [])
 
   def encode(term, []) do
-    Torque.Native.encode(term)
+    case Torque.Native.encode(term) do
+      {:error, :unhandled_struct} -> encode_retry(term, false)
+      other -> other
+    end
   end
 
   def encode(term, opts) do
-    if Keyword.get(opts, :dirty, false) do
-      Torque.Native.encode_dirty(term)
-    else
-      Torque.Native.encode(term)
+    dirty = Keyword.get(opts, :dirty, false)
+
+    case encode_native(term, dirty) do
+      {:error, :unhandled_struct} -> encode_retry(term, dirty)
+      other -> other
     end
   end
 
@@ -199,19 +211,23 @@ defmodule Torque do
   def encode_to_iodata(term, opts \\ [])
 
   def encode_to_iodata(term, []) do
-    Torque.Native.encode_iodata(term)
+    encode_iodata_native(term, false)
   catch
-    :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
+    :error, :unhandled_struct ->
+      term |> normalize() |> encode_iodata_retry(false)
+
+    :error, value ->
+      raise ArgumentError, "encode error: #{inspect(value)}"
   end
 
   def encode_to_iodata(term, opts) do
-    if Keyword.get(opts, :dirty, false) do
-      Torque.Native.encode_iodata_dirty(term)
-    else
-      Torque.Native.encode_iodata(term)
-    end
+    encode_iodata_native(term, Keyword.get(opts, :dirty, false))
   catch
-    :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
+    :error, :unhandled_struct ->
+      term |> normalize() |> encode_iodata_retry(Keyword.get(opts, :dirty, false))
+
+    :error, value ->
+      raise ArgumentError, "encode error: #{inspect(value)}"
   end
 
   @doc """
@@ -230,6 +246,141 @@ defmodule Torque do
   @doc group: :encode
   @spec encode_to_iodata!(term(), keyword()) :: binary()
   def encode_to_iodata!(term, opts \\ []), do: encode_to_iodata(term, opts)
+
+  # --- Encoding protocol ---
+
+  defprotocol Encoder do
+    @moduledoc """
+    Optional protocol for encoding Elixir structs as JSON.
+
+    Torque's NIF encoder rejects structs (maps carrying an atom
+    `__struct__` key) with `{:error, :unhandled_struct}`. When a struct
+    implements this protocol, `encode/1` runs it first and encodes the
+    returned term instead, recursively.
+
+    The protocol is deliberately opt-in: a struct without an
+    implementation is an error, never silently dropped fields.
+
+    ## Deriving
+
+    Structs can derive the implementation, encoding all fields or a
+    subset via `:only` / `:except`:
+
+        @derive {Torque.Encoder, only: [:id, :name]}
+        defstruct [:id, :name, :secret]
+
+        @derive {Torque.Encoder, except: [:secret]}
+        defstruct [:id, :name, :secret]
+
+    > Prefer `:only` to avoid accidentally leaking private information
+    > when new fields are added later.
+
+    ## Example
+
+        defimpl Torque.Encoder, for: Decimal do
+          def encode(decimal), do: Decimal.to_string(decimal)
+        end
+
+        Torque.encode!(%{price: Decimal.new("37.50")})
+        #=> ~s({"price":"37.50"})
+    """
+
+    @fallback_to_any true
+
+    @spec encode(term()) :: term()
+    def encode(term)
+
+    @impl true
+    defmacro __deriving__(module, opts) do
+      fields = module |> Macro.struct_info!(__CALLER__) |> Enum.map(& &1.field)
+      fields = fields_to_encode(fields, opts)
+
+      quote do
+        defimpl Torque.Encoder, for: unquote(module) do
+          def encode(struct) do
+            Map.take(struct, unquote(fields))
+          end
+        end
+      end
+    end
+
+    defp fields_to_encode(fields, opts) do
+      cond do
+        only = Keyword.get(opts, :only) ->
+          case only -- fields do
+            [] ->
+              only
+
+            error_keys ->
+              raise ArgumentError,
+                    "unknown struct fields #{inspect(error_keys)} specified in :only. " <>
+                      "Expected one of: #{inspect(fields -- [:__struct__])}"
+          end
+
+        except = Keyword.get(opts, :except) ->
+          case except -- fields do
+            [] ->
+              fields -- [:__struct__ | except]
+
+            error_keys ->
+              raise ArgumentError,
+                    "unknown struct fields #{inspect(error_keys)} specified in :except. " <>
+                      "Expected one of: #{inspect(fields -- [:__struct__])}"
+          end
+
+        true ->
+          fields -- [:__struct__]
+      end
+    end
+  end
+
+  # The Any fallback passes structs through untouched, so a struct without
+  # an explicit implementation still fails in the NIF with
+  # `:unhandled_struct` after the retry — it is never silently dropped.
+  defimpl Encoder, for: Any do
+    def encode(term), do: term
+  end
+
+  defp encode_native(term, dirty) do
+    if dirty, do: Torque.Native.encode_dirty(term), else: Torque.Native.encode(term)
+  end
+
+  defp encode_retry(term, dirty) do
+    term |> normalize() |> encode_native(dirty)
+  end
+
+  defp encode_iodata_native(term, true), do: Torque.Native.encode_iodata_dirty(term)
+  defp encode_iodata_native(term, false), do: Torque.Native.encode_iodata(term)
+
+  # Retry path: a struct that still has no protocol implementation fails
+  # with the same ArgumentError as every other encode error.
+  defp encode_iodata_retry(term, dirty) do
+    encode_iodata_native(term, dirty)
+  catch
+    :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
+  end
+
+  defp normalize(%_{} = struct) do
+    if Encoder.impl_for(struct) != Encoder.Any do
+      normalize(Encoder.encode(struct))
+    else
+      struct
+    end
+  end
+
+  defp normalize(list) when is_list(list) do
+    Enum.map(list, &normalize/1)
+  end
+
+  defp normalize(tuple) when is_tuple(tuple) do
+    tuple |> Tuple.to_list() |> Enum.map(&normalize/1) |> List.to_tuple()
+  end
+
+  defp normalize(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {k, normalize(v)} end)
+  end
+
+  defp normalize(term), do: term
 
   # --- Parse + Get ---
 
