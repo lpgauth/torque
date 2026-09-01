@@ -8,7 +8,8 @@ Torque provides the fastest JSON encoding and decoding available in the BEAM eco
 
 - SIMD-accelerated decoding (AVX2 on x86, NEON on ARM)
 - Ultra-low memory encoder (64 B per encode vs ~4 KB for OTP `json`/jason)
-- Parse-then-get API for selective field extraction via JSON Pointer (RFC 6901)
+- Parse-then-get API for selective field extraction via JSON Pointer (RFC 6901,
+  with one documented deviation: `"/"` selects the root, not the empty key)
 - Batch field extraction (`get_many/2`) with single NIF call
 - Pre-compiled pointers with fused parse + extract (`parse_get_many_nil/2`)
 - Automatic dirty CPU scheduler dispatch for decode/parse inputs larger than 20 KB (opt-in `dirty: true` for encode)

@@ -627,4 +627,110 @@ defmodule Torque.PropertyTest do
       assert {:error, :no_such_field} = Torque.get(doc2, "/a/0/x")
     end
   end
+
+  describe "pointer path handling agrees across every lookup path" do
+    defp pointer_token do
+      StreamData.one_of([
+        StreamData.constant("a"),
+        StreamData.constant("b"),
+        StreamData.constant(""),
+        StreamData.constant("0"),
+        StreamData.constant("1"),
+        StreamData.constant("00"),
+        StreamData.constant("01"),
+        StreamData.constant("é"),
+        StreamData.constant("a~0b"),
+        StreamData.constant("a~1b"),
+        StreamData.string(:alphanumeric, min_length: 1, max_length: 3)
+      ])
+    end
+
+    defp pointer_path do
+      StreamData.one_of([
+        StreamData.constant(""),
+        StreamData.constant("/"),
+        StreamData.map(
+          StreamData.list_of(pointer_token(), min_length: 1, max_length: 3),
+          fn segs ->
+            "/" <> Enum.join(segs, "/")
+          end
+        )
+      ])
+    end
+
+    @doc_json ~s({"a":{"b":[10,20],"0":"zero-key","":"empty-key"},"b":["x","y"],"0":1,"00":2,"é":3,"a/b":4,"a~b":5})
+
+    property "raw, compiled and fused extraction answer identically" do
+      {:ok, doc} = Torque.parse(@doc_json)
+
+      check all(paths <- StreamData.list_of(pointer_path(), min_length: 1, max_length: 4)) do
+        raw = Torque.get_many_nil(doc, paths)
+        compiled = Torque.compile_pointers(paths)
+
+        assert Torque.get_many_nil(doc, compiled) == raw
+        assert {:ok, raw} == Torque.parse_get_many_nil(@doc_json, compiled)
+      end
+    end
+
+    test "only ~0 and ~1 are escapes, on every extraction path" do
+      # RFC 6901 3 defines exactly two. Anything else was preserved literally,
+      # so `/a~2b` matched a key spelled `a~2b` and `compile_pointers/2` broke
+      # its documented promise to raise for an invalid pointer.
+      json = ~s({"a~b":1,"a/b":2,"a~2b":9})
+      {:ok, doc} = Torque.parse(json)
+
+      for bad <- ["/a~2b", "/a~", "/~", "/x~z", "/a~~0", "/ok/a~9"] do
+        assert Torque.get(doc, bad) == {:error, :no_such_field}, bad
+        assert Torque.get_many_nil(doc, [bad]) == [nil], bad
+        assert_raise ArgumentError, fn -> Torque.compile_pointers([bad]) end
+      end
+
+      # The two that are defined still resolve, raw, compiled and fused.
+      valid = ["/a~0b", "/a~1b"]
+      ptrs = Torque.compile_pointers(valid)
+
+      assert Torque.get_many_nil(doc, valid) == [1, 2]
+      assert Torque.get_many_nil(doc, ptrs) == [1, 2]
+      assert {:ok, [1, 2]} == Torque.parse_get_many_nil(json, ptrs)
+    end
+
+    test "a path that is not a JSON Pointer is a caller bug, not a crash" do
+      # Single-byte cases exercise the root-pointer fast path.
+      for bad <- ["foo", "é", "a/b", " /a", "x", "~", ".", " "] do
+        assert_raise ArgumentError, fn -> Torque.compile_pointers([bad]) end
+      end
+    end
+
+    test "the empty pointer and the root pointer select the whole document" do
+      {:ok, doc} = Torque.parse(~s({"a":1}))
+
+      for path <- ["", "/"] do
+        assert Torque.get_many_nil(doc, [path]) == [%{"a" => 1}]
+        assert Torque.get_many_nil(doc, Torque.compile_pointers([path])) == [%{"a" => 1}]
+      end
+    end
+
+    test "two tokens that parse to the same index do not collide in one handle" do
+      # The extraction plan keyed array children by parsed index, so "/00"
+      # landed on the child "/0" had already taken and answered nil while the
+      # document lookup answered "x".
+      json = ~s(["x"])
+      {:ok, doc} = Torque.parse(json)
+      ptrs = Torque.compile_pointers(["/0", "/00"])
+
+      assert Torque.get_many_nil(doc, ["/0", "/00"]) == ["x", nil]
+      assert Torque.get_many_nil(doc, ptrs) == ["x", nil]
+      assert {:ok, ["x", nil]} == Torque.parse_get_many_nil(json, ptrs)
+    end
+
+    test "a token with a leading zero is an object key, never an array index" do
+      {:ok, doc} = Torque.parse(~s({"arr":["x"],"obj":{"00":"keyed"}}))
+
+      assert Torque.get_many_nil(doc, ["/arr/00", "/obj/00", "/arr/0"]) ==
+               [nil, "keyed", "x"]
+
+      ptrs = Torque.compile_pointers(["/arr/00", "/obj/00", "/arr/0"])
+      assert Torque.get_many_nil(doc, ptrs) == [nil, "keyed", "x"]
+    end
+  end
 end

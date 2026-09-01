@@ -284,6 +284,11 @@ defmodule Torque do
   Paths must start with `"/"`. Array elements are addressed by index
   (e.g. `"/imp/0/banner/w"`). An empty path `""` returns the root value.
 
+  One deviation from RFC 6901: `"/"` also returns the root value, where the
+  RFC reads it as the member whose key is the empty string. Every pointer
+  entry point in Torque agrees on that, and changing it would silently move
+  existing callers' lookups, so it stands until a breaking release.
+
   ## Examples
 
       iex> {:ok, doc} = Torque.parse(~s({"site":{"domain":"example.com"}}))
@@ -403,7 +408,8 @@ defmodule Torque do
   Compile once at startup (e.g. into a module attribute or `:persistent_term`)
   and reuse the handle for every document.
 
-  Raises `ArgumentError` if any path is not a valid UTF-8 binary.
+  Raises `ArgumentError` if any path is not a valid UTF-8 binary or JSON Pointer.
+  A JSON Pointer is either empty or begins with `/`.
 
   ## Options
 
