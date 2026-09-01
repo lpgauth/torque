@@ -47,10 +47,16 @@ fields = ~w(/id /site/domain /site/page /site/publisher/id /site/cat
             /device/devicetype /device/ua /device/ip /device/geo/country
             /device/geo/lat /device/connectiontype /user/id /imp /regs/coppa)
 
+# Array indexes use a distinct extraction-plan path not reached by `fields`.
+indexed_fields = ~w(/imp/0/id /imp/0/banner/w /site/cat/0 /id)
+
 # Compiled-pointer handles are built once at startup in real use, so compile
 # them outside the loop and exercise only the per-request extraction below.
 compiled = Torque.compile_pointers(fields)
 compiled_uk = Torque.compile_pointers(fields, unique_keys: true)
+compiled_idx = Torque.compile_pointers(indexed_fields)
+# Train structural skipping as well as fully validated extraction.
+compiled_fast = Torque.compile_pointers(fields, unique_keys: true, validate: false)
 
 IO.puts("PGO workload: small=#{byte_size(small_json)}B large=#{byte_size(large_json)}B")
 
@@ -82,6 +88,10 @@ compiled_get = fn ->
   {:ok, _} = Torque.parse_get_many_nil(small_json, compiled)
   {:ok, _} = Torque.parse_get_many_nil(large_json, compiled)
   {:ok, _} = Torque.parse_get_many_nil(small_json, compiled_uk)
+  # Array-index and unchecked paths.
+  {:ok, _} = Torque.parse_get_many_nil(small_json, compiled_idx)
+  {:ok, _} = Torque.parse_get_many_nil(small_json, compiled_fast)
+  {:ok, _} = Torque.parse_get_many_nil(large_json, compiled_fast)
   # Compiled-pointer extraction against an already-parsed handle.
   {:ok, doc} = Torque.parse(small_json)
   Torque.get_many_nil(doc, compiled)

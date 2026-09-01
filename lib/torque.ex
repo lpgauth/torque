@@ -5,15 +5,23 @@ defmodule Torque do
   ## Decoding strategies
 
     * **Parse + Get** — `parse/2` returns an opaque document reference.
-      `get/2`, `get/3`, `get_many/2`, and `get_many_nil/2` extract fields
-      by JSON Pointer (RFC 6901) paths without materializing the full
-      Elixir term tree. Ideal when only a subset of fields is needed.
+      `get/2`, `get/3`, `get_many/2`, `get_many_nil/2` and
+      `get_many_defaults/2` extract fields by JSON Pointer (RFC 6901) paths
+      without materializing the full Elixir term tree. Ideal when the *same*
+      document is queried more than once, which is what the handle is for.
 
     * **Compiled pointers** — when the same fixed set of paths is extracted
       from every document, `compile_pointers/2` pre-parses the paths once and
-      `parse_get_many_nil/2` fuses the parse and extraction into a single NIF
-      call. Skips all per-request path parsing — roughly 1.5× faster end-to-end
-      than `parse/2` + `get_many_nil/2`.
+      `parse_get_many_nil/2` reads the document in a single pass, building
+      values only where a path ends and skipping everything else. For one-shot
+      extraction — parse a payload, take a few fields, discard it — prefer this
+      over `parse/2` + `get/2`: it never builds the document it is about to
+      throw away. That is worth ~1.4× on a request-shaped payload and fades to
+      parity as the document grows, since on a large one the plan walk costs
+      about what the document build it replaces did. The bigger lever is
+      `validate: false` on the handle, worth ~7× on a 450 KB feed read through
+      a handful of paths, but read its note in `compile_pointers/2` first: it
+      is only a win when the paths select a small part of the document.
 
     * **Full decode** — `decode/1` converts an entire JSON binary into
       Elixir terms in one pass.
@@ -350,7 +358,10 @@ defmodule Torque do
   `{:ok, value}` or `{:error, :no_such_field}`.
 
   More efficient than calling `get/2` in a loop because it crosses
-  the NIF boundary only once.
+  the NIF boundary only once. For a request-shaped document you query once and
+  then discard, `compile_pointers/2` + `parse_get_many_nil/2` is usually faster
+  still, since it never builds the document at all, though that advantage
+  narrows to nothing as the document grows.
 
   Raises `ArgumentError` if any path is not a valid UTF-8 binary.
 
@@ -415,8 +426,10 @@ defmodule Torque do
   in place of a path list, eliminating all per-call path parsing (≈2× faster
   extraction on a typical field set).
 
-  Compile once at startup (e.g. into a module attribute or `:persistent_term`)
-  and reuse the handle for every document.
+  Compile once at startup (e.g. into `:persistent_term`, application state or
+  the process holding the documents) and reuse the handle for every document.
+  A `t:pointers/0` is a NIF resource reference, so it cannot be built at
+  compile time into a module attribute.
 
   Raises `ArgumentError` if any path is not a valid UTF-8 binary or JSON Pointer.
   A JSON Pointer is either empty or begins with `/`.
@@ -427,6 +440,23 @@ defmodule Torque do
       stops at the first match (faster). Defaults to `false` (reverse scan,
       last-value-wins for duplicate keys), matching `parse/2`. Safe to enable
       when keys are known to be unique.
+
+    * `:validate` — controls validation of regions not selected by any path.
+      The default, `true`, reports malformed input anywhere in the document.
+      When `false`, unselected regions are skipped without syntax validation;
+      selected values and every byte the walk consumes are still validated,
+      UTF-8 included. The check for content *after* the document is skipped
+      too, so `~s({"a":1} junk)` succeeds where `decode/1` and the default
+      reject it, and trailing bytes are not UTF-8 checked either, being bytes
+      the walk never reached. Truncated input is still rejected, because
+      skipping has to find the closing delimiter. Use it only with trusted
+      input.
+
+      Measure before enabling it. Skipping a region structurally is a bracket
+      scan over 64-byte blocks, which beats tokenizing a large subtree and
+      loses to it on the few-byte scalars left over when the paths select most
+      of the document. Reading 3 paths out of a 2 KB request is ~3.6× faster
+      unvalidated; reading 146 of its fields is ~1.2× *slower*.
 
   Any other option raises `ArgumentError`.
 
@@ -442,21 +472,26 @@ defmodule Torque do
   @doc group: :parse_get
   @spec compile_pointers([binary()], keyword()) :: pointers()
   def compile_pointers(paths, opts \\ []) when is_list(paths) do
-    Torque.Native.compile_paths(paths, unique_keys!(opts))
+    opts = Keyword.validate!(opts, unique_keys: false, validate: true)
+    Torque.Native.compile_paths(paths, opts[:unique_keys], opts[:validate])
   end
 
   @doc """
   Parses a JSON binary and extracts pre-compiled pointers in a single NIF call.
 
   Fuses `parse/2` and `get_many_nil/2` for the common parse-once-extract-once
-  case: it parses the document, extracts each compiled pointer, and returns the
-  values — without materializing a reusable document handle or crossing the NIF
-  boundary twice. Missing fields and JSON `null` both become `nil`. The lookup
-  strategy (`:unique_keys`) is taken from the `t:pointers/0` handle.
+  case: it walks the document once, building a value only where a compiled
+  pointer ends and skipping the rest, without materializing a document, a
+  reusable handle, or a second NIF boundary crossing. Missing fields and JSON
+  `null` both become `nil`. Both the lookup strategy (`:unique_keys`) and the
+  validation policy (`:validate`) come from the `t:pointers/0` handle.
 
   Returns `{:ok, values}` (in the same order as the paths given to
-  `compile_pointers/2`) or `{:error, reason}` if the JSON is malformed.
-  Automatically uses a dirty CPU scheduler for inputs larger than 20 KB.
+  `compile_pointers/2`) or `{:error, reason}` if the JSON is malformed. A
+  handle compiled with `validate: false` reports faults only in the regions it
+  reads, so some malformed documents return `{:ok, values}` instead — see
+  `compile_pointers/2`. Automatically uses a dirty CPU scheduler for inputs
+  larger than 20 KB.
 
   ## Examples
 

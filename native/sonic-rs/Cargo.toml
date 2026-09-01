@@ -18,6 +18,8 @@
 #     its sign, which `sonic-number` drops
 #   * `Error::is_recursion_limit` so the NIF can classify the nesting-limit
 #     error without matching its message
+#   * `extract` module: one-pass extraction of a compiled path set that
+#     builds values only where a path ends and skips the rest
 # Upstream: https://github.com/cloudwego/sonic-rs (Apache-2.0)
 
 # Standalone manifest so this is not pulled into the torque workspace.

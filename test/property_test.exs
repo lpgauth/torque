@@ -672,6 +672,22 @@ defmodule Torque.PropertyTest do
       end
     end
 
+    @dup_json ~s({"a":{"b":[10,20],"c":1},"a":{"b":[30],"d":2},"b":["x"],"b":["y","z"],"0":1,"0":2,"":{"a":1},"":9})
+
+    property "duplicate keys resolve identically on every extraction path" do
+      {:ok, doc} = Torque.parse(@dup_json)
+
+      check all(paths <- StreamData.list_of(pointer_path(), min_length: 1, max_length: 4)) do
+        raw = Torque.get_many_nil(doc, paths)
+        compiled = Torque.compile_pointers(paths)
+        loose = Torque.compile_pointers(paths, validate: false)
+
+        assert Torque.get_many_nil(doc, compiled) == raw
+        assert {:ok, raw} == Torque.parse_get_many_nil(@dup_json, compiled)
+        assert {:ok, raw} == Torque.parse_get_many_nil(@dup_json, loose)
+      end
+    end
+
     test "only ~0 and ~1 are escapes, on every extraction path" do
       # RFC 6901 3 defines exactly two. Anything else was preserved literally,
       # so `/a~2b` matched a key spelled `a~2b` and `compile_pointers/2` broke
