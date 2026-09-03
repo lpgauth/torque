@@ -19,7 +19,7 @@ cargo clippy -- -D warnings        # Rust linter
 MIX_ENV=bench mix run bench/torque_bench.exs  # run benchmarks
 ```
 
-`TORQUE_BUILD=true` is required for local development to force compilation from Rust source instead of downloading precompiled binaries. Without it, `RustlerPrecompiled` will try to fetch binaries from GitHub releases.
+`TORQUE_BUILD=true` is required for local development to force compilation from Rust source instead of downloading precompiled binaries. Without it, `RustlerPrecompiled` will try to fetch binaries from GitHub releases. The flag is read when `Torque.Native` compiles, so `Torque.Build` (`lib/torque/build.ex`) makes it part of that module's staleness through `__mix_recompile__?/0`: without it a `_build` tree made without the variable keeps loading a downloaded NIF however later commands are invoked, which silently runs a *released* binary against local Rust changes and reports a green suite. The check cannot live in `Torque.Native`, because a module whose `on_load` fails is not loadable and Mix cannot ask it anything.
 
 ## Profile-Guided Optimisation (PGO)
 
@@ -31,8 +31,10 @@ Produces an optimised `priv/native/torque_nif.so` (typically 5-15% faster on
 JSON-heavy work than plain `-O3`). The script builds an instrumented NIF, runs
 `bench/pgo_workload.exs` to collect branch/call-frequency data, merges the raw
 `*.profraw` counters with `llvm-profdata`, then rebuilds with `-Cprofile-use`.
-Like any `TORQUE_BUILD` build it overwrites `priv/native/torque_nif.so`, so
-re-run `mix compile` (without PGO) to get back to a plain build.
+Like any `TORQUE_BUILD` build it overwrites `priv/native/torque_nif.so`. Run
+`TORQUE_BUILD=true mix compile --force` to restore a plain build: the variable
+selects the source build, and `--force` replaces the profiled artifact even when
+the sources are unchanged.
 
 Notes:
 - rustc is LLVM-based, so PGO uses the same `llvm-profdata merge` step as a
@@ -124,6 +126,7 @@ Decode/parse inputs larger than 20 KB are automatically dispatched to dirty CPU 
 
 - `lib/torque.ex` — public API with `@doc`, typespecs, dirty scheduler dispatch
 - `lib/torque/native.ex` — RustlerPrecompiled NIF stubs (set `TORQUE_BUILD=true` to compile from source)
+- `lib/torque/build.ex` — captures `TORQUE_BUILD` and makes switching it recompile `Torque.Native`
 - `native/torque_nif/src/lib.rs` — NIF registration, `ParsedDocument` + `CompiledPaths` (`PathSeg`) resources
 - `native/torque_nif/src/decoder.rs` — parse, get, get_many, get_many_nil, decode NIFs; compiled-pointer + fused `parse_get_many_nil` path
 - `native/torque_nif/src/native_decode.rs` — fused decoder; builds terms during the SIMD parse via sonic-rs's `JsonVisitor`

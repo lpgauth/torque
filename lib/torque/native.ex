@@ -3,11 +3,13 @@ defmodule Torque.Native do
 
   version = Mix.Project.config()[:version]
 
+  # `Torque.Build` owns this flag so that switching TORQUE_BUILD recompiles
+  # this module; see the note there.
   use RustlerPrecompiled,
     otp_app: :torque,
     crate: "torque_nif",
     base_url: "https://github.com/lpgauth/torque/releases/download/v#{version}",
-    force_build: System.get_env("TORQUE_BUILD") in ["1", "true"],
+    force_build: Torque.Build.force_build?(),
     targets: ~w(
       aarch64-apple-darwin
       aarch64-unknown-linux-gnu
