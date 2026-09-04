@@ -106,6 +106,9 @@ Torque is a high-performance JSON library for Elixir using Rustler NIFs backed b
 
 `encode/1` walks Elixir terms directly (no intermediate representation) and writes JSON bytes to a buffer. Supports maps (atom/binary/integer keys — integer keys are stringified, since JSON object names must be strings), lists, numbers, booleans, nil, and jiffy-style `{proplist}` tuples.
 
+Atom names are read as Latin-1 into a stack buffer, because `ERL_NIF_UTF8` needs NIF 2.17 and the NIF still loads on 2.15. A name with any character above U+00FF makes that read fail, so those atoms go through `enif_term_to_binary` and the name is taken from the `SMALL_ATOM_UTF8_EXT` / `ATOM_UTF8_EXT` payload instead. Only the names the Latin-1 read rejects pay for that binary.
+
+
 ### Scheduler Awareness
 
 Decode/parse inputs larger than 20 KB are automatically dispatched to dirty CPU schedulers to avoid blocking normal BEAM schedulers. Encoding cannot cheaply predict output size, so dirty dispatch is opt-in via `dirty: true` on `encode/2`, `encode!/2`, and `encode_to_iodata/2`. The `get/2` NIF always runs on a normal scheduler (sub-microsecond pointer traversal).

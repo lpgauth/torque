@@ -135,6 +135,48 @@ defmodule Torque.EncodeTest do
       assert %{"café" => 1} = Jason.decode!(json)
     end
 
+    test "an atom above Latin-1 encodes as UTF-8 everywhere an atom is accepted" do
+      # `enif_get_atom` cannot spell these below NIF 2.17, so they used to come
+      # back `:unsupported_type` while `:café` encoded. Cover the boundary in
+      # both directions and every position an atom can occupy.
+      atoms = [
+        :ok,
+        :"",
+        :"\0",
+        :"before\0after",
+        :"\u00ff",
+        :"\u0100",
+        :Ω,
+        :"🚀",
+        :日本語,
+        :"é🚀ü",
+        :"a\"b\\c\n",
+        String.to_atom(String.duplicate("a", 255)),
+        String.to_atom(String.duplicate("ÿ", 255)),
+        String.to_atom(String.duplicate("🚀", 255))
+      ]
+
+      for atom <- atoms do
+        for term <- [atom, [atom], %{atom => 1}, %{"k" => atom}] do
+          assert Torque.encode(term) == Jason.encode(term),
+                 "#{inspect(atom)} in #{inspect(term) |> String.slice(0, 40)}"
+        end
+
+        # Jason has no `{proplist}` form, so hold it to the map's output.
+        assert Torque.encode({[{atom, 1}]}) == Torque.encode(%{atom => 1}),
+               "#{inspect(atom)} as a proplist key"
+      end
+    end
+
+    test "the widest atom name survives the Unicode fallback" do
+      # 255 characters is the ERTS cap; in UTF-8 that is 1020 bytes, four times
+      # what the Latin-1 stack buffer holds.
+      wide = String.duplicate("🚀", 255)
+      assert byte_size(wide) == 1020
+      assert {:ok, json} = Torque.encode(%{String.to_atom(wide) => 1})
+      assert %{^wide => 1} = Jason.decode!(json)
+    end
+
     test "improper list returns error" do
       assert {:error, :unsupported_type} = Torque.encode([1 | 2])
       assert {:error, :unsupported_type} = Torque.encode(%{"a" => [1 | 2]})
