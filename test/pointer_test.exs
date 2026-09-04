@@ -354,6 +354,25 @@ defmodule Torque.PointerTest do
     end
   end
 
+  describe "unknown options raise" do
+    test "a misspelled option is not silently defaulted" do
+      # `unique_keys` changes what the caller gets back, so a typo that
+      # silently kept the default was a correctness trap.
+      assert_raise ArgumentError, fn -> Torque.compile_pointers(["/a"], unique_key: true) end
+      assert_raise ArgumentError, fn -> Torque.parse(~s({"a":1}), unique_key: true) end
+      assert_raise ArgumentError, fn -> Torque.encode(%{a: 1}, dirtyy: true) end
+      assert_raise ArgumentError, fn -> Torque.encode!(%{a: 1}, dirtyy: true) end
+      assert_raise ArgumentError, fn -> Torque.encode_to_iodata(%{a: 1}, dirtyy: true) end
+    end
+
+    test "the documented options still work" do
+      assert Torque.compile_pointers(["/a"], unique_keys: true) |> is_reference()
+      assert {:ok, _} = Torque.parse(~s({"a":1}), unique_keys: true)
+      assert {:ok, ~s({"a":1})} = Torque.encode(%{a: 1}, dirty: true)
+      assert ~s({"a":1}) == Torque.encode_to_iodata(%{a: 1}, dirty: true)
+    end
+  end
+
   describe "large subtree extraction" do
     # Exercises the node-count timeslice accounting paths (>512 terms built).
     test "get of a large root returns the full document" do
