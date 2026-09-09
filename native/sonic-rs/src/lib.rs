@@ -8,21 +8,21 @@ mod config;
 pub mod error;
 mod index;
 mod input;
-mod parser;
 mod pointer;
-mod reader;
+pub mod reader;
 mod util;
 
 pub mod format;
 pub mod lazyvalue;
+pub mod parser;
 pub mod serde;
 pub mod value;
 pub mod writer;
 
 // re-export FastStr
+pub use ::faststr::FastStr;
 // re-export the serde trait
 pub use ::serde::{Deserialize, Serialize};
-pub use faststr::FastStr;
 #[doc(inline)]
 pub use reader::Read;
 
@@ -37,24 +37,26 @@ pub use crate::lazyvalue::{
     get, get_from_bytes, get_from_bytes_unchecked, get_from_faststr, get_from_faststr_unchecked,
     get_from_slice, get_from_slice_unchecked, get_from_str, get_from_str_unchecked, get_many,
     get_many_unchecked, get_unchecked, to_array_iter, to_array_iter_unchecked, to_object_iter,
-    to_object_iter_unchecked, ArrayJsonIter, LazyValue, ObjectJsonIter, OwnedLazyValue,
+    to_object_iter_unchecked, ArrayJsonIter, LazyArray, LazyObject, LazyValue, ObjectJsonIter,
+    OwnedLazyValue,
 };
 #[doc(inline)]
 pub use crate::pointer::{JsonPointer, PointerNode, PointerTree};
 #[doc(inline)]
+pub use crate::serde::de::{MapAccess, SeqAccess};
+#[doc(inline)]
 pub use crate::serde::{
-    from_slice, from_slice_unchecked, from_str, to_string, to_string_pretty, to_vec, to_vec_pretty,
-    to_writer, to_writer_pretty, Deserializer, JsonNumberTrait, Number, RawNumber, Serializer,
-    StreamDeserializer,
+    from_reader, from_slice, from_slice_unchecked, from_str, to_lazyvalue, to_string,
+    to_string_pretty, to_vec, to_vec_pretty, to_writer, to_writer_pretty, Deserializer,
+    JsonNumberTrait, Number, RawNumber, Serializer, StreamDeserializer,
 };
 #[doc(inline)]
 pub use crate::value::{
-    from_value, to_value, Array, JsonContainerTrait, JsonType, JsonValueMutTrait, JsonValueTrait,
-    Object, Value, ValueRef,
+    from_value, get::get_by_schema, to_value, Array, JsonContainerTrait, JsonType,
+    JsonValueMutTrait, JsonValueTrait, Object, Value, ValueRef,
 };
 
 // --- Torque patch: expose the native push-based visitor parse ---
-pub use crate::value::node::RawStr;
 pub use crate::value::visitor::JsonVisitor;
 
 /// Parse `json` by driving the push-based [`JsonVisitor`] directly over the
@@ -67,7 +69,7 @@ where
 {
     let mut parser = crate::parser::Parser::new(Read::from(json));
     let mut strbuf = Vec::new();
-    parser.parse_dom2(visitor, &mut strbuf)?;
+    parser.parse_dom(visitor, Some(&mut strbuf))?;
     parser.parse_trailing()
 }
 

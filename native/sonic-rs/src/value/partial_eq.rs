@@ -18,15 +18,13 @@ impl PartialEq for Value {
             ValueRefInner::Number(_) | ValueRefInner::RawNum(_) => {
                 other.as_number() == self.as_number()
             }
-            ValueRefInner::Str(a) | ValueRefInner::RawStr(UnpackedRawStr { raw: _, str: a }) => {
-                other.as_str() == Some(a)
-            }
+            ValueRefInner::Str(a) => other.as_str() == Some(a),
             ValueRefInner::Array(_) | ValueRefInner::EmptyArray => {
                 other.as_value_slice() == self.as_value_slice()
             }
-            ValueRefInner::Object(_) | ValueRefInner::EmptyObject => {
-                other.as_object() == self.as_object()
-            }
+            ValueRefInner::Object(_)
+            | ValueRefInner::EmptyObject
+            | ValueRefInner::ObjectOwned(_) => other.as_object() == self.as_object(),
         }
     }
 }
@@ -90,24 +88,22 @@ impl PartialEq<Value> for &str {
 ///////////////////////////////////////////////////////////////////
 // Copied from serde_json
 
-#[inline]
-fn eq_i64(value: &Value, other: i64) -> bool {
-    value.as_i64() == Some(other)
+macro_rules! impl_eq_fn {
+    ($($name:ident($ty:ty) => $accessor:ident;)*) => {
+        $(
+            #[inline]
+            fn $name(value: &Value, other: $ty) -> bool {
+                value.$accessor() == Some(other)
+            }
+        )*
+    };
 }
 
-#[inline]
-fn eq_u64(value: &Value, other: u64) -> bool {
-    value.as_u64() == Some(other)
-}
-
-#[inline]
-fn eq_f64(value: &Value, other: f64) -> bool {
-    value.as_f64() == Some(other)
-}
-
-#[inline]
-fn eq_bool(value: &Value, other: bool) -> bool {
-    value.as_bool() == Some(other)
+impl_eq_fn! {
+    eq_i64(i64) => as_i64;
+    eq_u64(u64) => as_u64;
+    eq_f64(f64) => as_f64;
+    eq_bool(bool) => as_bool;
 }
 
 #[inline]
@@ -222,7 +218,7 @@ impl_slice_eq!([], Vec<U>);
 
 //////////////////////////////////////////////////////////////////////////////
 
-use super::{array::Array, node::UnpackedRawStr, object::Object};
+use super::{array::Array, object::Object};
 
 macro_rules! impl_container_eq {
     ($($ty:ty)*) => {

@@ -8,7 +8,7 @@ use crate::{serde::tri, util::string::format_string, writer::WriteExt};
 
 /// This trait abstracts away serializing the JSON control characters, which allows the user to
 /// optionally pretty print the JSON output.
-pub trait Formatter {
+pub trait Formatter: Clone {
     /// Writes a `null` value to the specified writer.
     #[inline]
     fn write_null<W>(&mut self, writer: &mut W) -> io::Result<()>
@@ -147,7 +147,12 @@ pub trait Formatter {
     where
         W: ?Sized + Write,
     {
-        let mut buffer = ryu::Buffer::new();
+        #[cfg(feature = "non_trailing_zero")]
+        if value.fract() == 0.0 && value <= (i64::MAX as f32) && value >= (i64::MIN as f32) {
+            return self.write_i64(writer, value as i64);
+        }
+
+        let mut buffer = zmij::Buffer::new();
         let s = buffer.format_finite(value);
         writer.write_all(s.as_bytes())
     }
@@ -158,7 +163,12 @@ pub trait Formatter {
     where
         W: ?Sized + Write,
     {
-        let mut buffer = ryu::Buffer::new();
+        #[cfg(feature = "non_trailing_zero")]
+        if value.fract() == 0.0 && value <= (i64::MAX as f64) && value >= (i64::MIN as f64) {
+            return self.write_i64(writer, value as i64);
+        }
+
+        let mut buffer = zmij::Buffer::new();
         let s = buffer.format_finite(value);
         writer.write_all(s.as_bytes())
     }
@@ -172,8 +182,8 @@ pub trait Formatter {
         writer.write_all(value.as_bytes())
     }
 
-    /// Writes a string fragment that doesn't need any escaping to the
-    /// specified writer.
+    /// Writes a string as JSON string to the specified writer. Will escape the string if necessary.
+    /// If `need_quote` is `false`, the string will be written without quotes.
     #[inline]
     fn write_string_fast<W>(
         &mut self,
@@ -186,7 +196,7 @@ pub trait Formatter {
     {
         let buf = writer.reserve_with(value.len() * 6 + 32 + 3)?;
         let cnt = format_string(value, buf, need_quote);
-        unsafe { writer.flush_len(cnt) };
+        unsafe { writer.flush_len(cnt)? };
         Ok(())
     }
 

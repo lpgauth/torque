@@ -19,6 +19,7 @@ use std::cell::RefCell;
 use std::mem::MaybeUninit;
 
 use crate::atoms;
+use crate::decoder::parse_error_term;
 use crate::nif_util::make_tuple2;
 use crate::types::MAX_DEPTH;
 
@@ -505,11 +506,7 @@ pub fn decode_to_term<'a>(env: Env<'a>, input_term: ERL_NIF_TERM, bytes: &[u8]) 
                         atoms::nesting_too_deep().as_c_arg(),
                     )
                 } else {
-                    make_tuple2(
-                        env,
-                        atoms::error().as_c_arg(),
-                        format!("{}", e).encode(env).as_c_arg(),
-                    )
+                    parse_error_term(env, format!("{}", e))
                 }
             }
         };

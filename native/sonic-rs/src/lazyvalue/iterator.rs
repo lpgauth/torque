@@ -1,13 +1,12 @@
-use faststr::FastStr;
+use std::borrow::Cow;
 
 use crate::{
     error::Result,
-    input::JsonInput,
+    input::{JsonInput, JsonSlice},
     lazyvalue::LazyValue,
-    parser::{Parser, DEFAULT_KEY_BUF_CAPACITY},
+    parser::{Pair, Parser, DEFAULT_KEY_BUF_CAPACITY},
     reader::{Read, Reader},
 };
-
 /// A lazied iterator for JSON object text. It will parse the JSON when iterating.
 ///
 /// The item of the iterator is [`Result<LazyValue>`][`crate::LazyValue`].
@@ -39,7 +38,7 @@ pub struct ObjectJsonIter<'de> {
     strbuf: Vec<u8>,
     first: bool,
     ending: bool,
-    check: bool,
+    skip_strict: bool,
 }
 
 /// A lazied iterator for JSON array text. It will parse the JSON when iterating.
@@ -73,21 +72,38 @@ pub struct ArrayJsonIter<'de> {
     parser: Parser<Read<'de>>,
     first: bool,
     ending: bool,
-    check: bool,
+    skip_strict: bool,
 }
 
 impl<'de> ObjectJsonIter<'de> {
-    fn new<I: JsonInput<'de>>(json: I, check: bool) -> Self {
+    // input is inner json, expected always be validated and well-formed
+    pub(crate) fn new_inner(input: JsonSlice<'de>) -> Self {
         Self {
-            parser: Parser::new(Read::new_in(json, check)),
+            parser: Parser::new(Read::new_in(input, false)),
             strbuf: Vec::with_capacity(DEFAULT_KEY_BUF_CAPACITY),
             first: true,
             ending: false,
-            check,
+            skip_strict: false,
         }
     }
 
-    fn next_entry_impl(&mut self, check: bool) -> Option<Result<(FastStr, LazyValue<'de>)>> {
+    pub(crate) fn new<I: JsonInput<'de>>(input: I, skip_strict: bool) -> Self {
+        let validate_utf8 = if skip_strict {
+            input.need_utf8_valid()
+        } else {
+            Default::default()
+        };
+
+        Self {
+            parser: Parser::new(Read::new_in(input.to_json_slice(), validate_utf8)),
+            strbuf: Vec::with_capacity(DEFAULT_KEY_BUF_CAPACITY),
+            first: true,
+            ending: false,
+            skip_strict,
+        }
+    }
+
+    fn next_entry_impl(&mut self) -> Option<Result<(Cow<'de, str>, LazyValue<'de>)>> {
         if self.ending {
             return None;
         }
@@ -102,12 +118,12 @@ impl<'de> ObjectJsonIter<'de> {
 
         match self
             .parser
-            .parse_entry_lazy(&mut self.strbuf, &mut self.first, check)
+            .parse_entry_lazy(&mut self.strbuf, &mut self.first, self.skip_strict)
         {
             Ok(ret) => {
-                if let Some((key, val, has_escaped)) = ret {
+                if let Some(Pair { key, val, status }) = ret {
                     let val = self.parser.read.slice_ref(val);
-                    Some(LazyValue::new(val, has_escaped).map(|v| (key, v)))
+                    Some(Ok(LazyValue::new(val, status.into())).map(|v| (key, v)))
                 } else {
                     self.ending = true;
                     None
@@ -122,16 +138,32 @@ impl<'de> ObjectJsonIter<'de> {
 }
 
 impl<'de> ArrayJsonIter<'de> {
-    fn new<I: JsonInput<'de>>(input: I, check: bool) -> Self {
+    // input is inner json, expected always be validated and well-formed
+    pub(crate) fn new_inner(input: JsonSlice<'de>) -> Self {
         Self {
-            parser: Parser::new(Read::new_in(input, check)),
+            parser: Parser::new(Read::new_in(input, false)),
             first: true,
             ending: false,
-            check,
+            skip_strict: false,
         }
     }
 
-    fn next_elem_impl(&mut self, check: bool) -> Option<Result<LazyValue<'de>>> {
+    pub(crate) fn new<I: JsonInput<'de>>(input: I, skip_strict: bool) -> Self {
+        let validate_utf8 = if skip_strict {
+            input.need_utf8_valid()
+        } else {
+            Default::default()
+        };
+
+        Self {
+            parser: Parser::new(Read::new_in(input.to_json_slice(), validate_utf8)),
+            first: true,
+            ending: false,
+            skip_strict,
+        }
+    }
+
+    fn next_elem_impl(&mut self) -> Option<Result<LazyValue<'de>>> {
         if self.ending {
             return None;
         }
@@ -144,11 +176,14 @@ impl<'de> ArrayJsonIter<'de> {
             }
         }
 
-        match self.parser.parse_array_elem_lazy(&mut self.first, check) {
+        match self
+            .parser
+            .parse_array_elem_lazy(&mut self.first, self.skip_strict)
+        {
             Ok(ret) => {
-                if let Some((val, has_escaped)) = ret {
+                if let Some((val, status)) = ret {
                     let val = self.parser.read.slice_ref(val);
-                    Some(LazyValue::new(val, has_escaped))
+                    Some(Ok(LazyValue::new(val, status.into())))
                 } else {
                     self.ending = true;
                     None
@@ -314,10 +349,10 @@ pub unsafe fn to_array_iter_unchecked<'de, I: JsonInput<'de>>(json: I) -> ArrayJ
 }
 
 impl<'de> Iterator for ObjectJsonIter<'de> {
-    type Item = Result<(FastStr, LazyValue<'de>)>;
+    type Item = Result<(Cow<'de, str>, LazyValue<'de>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_entry_impl(self.check)
+        self.next_entry_impl()
     }
 }
 
@@ -325,7 +360,7 @@ impl<'de> Iterator for ArrayJsonIter<'de> {
     type Item = Result<LazyValue<'de>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_elem_impl(self.check)
+        self.next_elem_impl()
     }
 }
 
@@ -359,22 +394,20 @@ mod test {
 
         let mut test_ok = |key: &str, val: &str, typ: JsonType| {
             let ret = iter.next().unwrap().unwrap();
-            assert_eq!(ret.0.as_str(), key);
+            assert_eq!(ret.0.as_ref(), key);
             assert_eq!(
                 ret.1.as_raw_str().as_bytes(),
                 val.as_bytes(),
-                "key is {} ",
-                key
+                "key is {key} ",
             );
             assert_eq!(ret.1.get_type(), typ);
 
             let ret = iter_unchecked.next().unwrap().unwrap();
-            assert_eq!(ret.0.as_str(), key);
+            assert_eq!(ret.0.as_ref(), key);
             assert_eq!(
                 ret.1.as_raw_str().as_bytes(),
                 val.as_bytes(),
-                "key is {} ",
-                key
+                "key is {key} ",
             );
             assert_eq!(ret.1.get_type(), typ);
         };
@@ -490,7 +523,7 @@ mod test {
         let json = Bytes::from(r#"[1, true, "hello", null, 5, 6]"#);
         let iter = to_array_iter(&json);
         let out: Vec<JsonType> = iter.map(|e| e.get_type()).collect();
-        println!("array elem type is {:?}", out);
+        println!("array elem type is {out:?}");
     }
 
     #[test]
@@ -508,7 +541,7 @@ mod test {
             assert_eq!(
                 item.err().unwrap().to_string(),
                 "Invalid UTF-8 characters in json at line 1 column \
-                 5\n\n\t[\"\0\0\0��\"]\n\t.....^...\n"
+                 6\n\n\t[\"\0\0\0��\"]\n\t.....^...\n"
             );
         }
 
@@ -520,8 +553,22 @@ mod test {
             assert_eq!(
                 item.err().unwrap().to_string(),
                 "Invalid UTF-8 characters in json at line 1 column \
-                 5\n\n\t{\"\0\0\0��\":\"\"}\n\t.....^......\n"
+                 6\n\n\t{\"\0\0\0��\":\"\"}\n\t.....^......\n"
             );
         }
+    }
+
+    #[test]
+    fn test_issue_182_uaf() {
+        let json = r#"{"key": "value"}"#;
+        let root: LazyValue = crate::from_str(json).unwrap();
+        let key = {
+            let mut iter = root.into_object_iter().unwrap();
+            let (key, _) = iter.next().unwrap().unwrap();
+            key
+        };
+
+        // the asan will report uaf here if uaf happened
+        assert_eq!(key, "key");
     }
 }

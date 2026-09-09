@@ -66,6 +66,18 @@ where
 // Not export this because it is mainly used in `json!`.
 pub(crate) struct Serializer;
 
+macro_rules! forward_to {
+    ($($method:ident($ty:ty) => $target:ident;)*) => {
+        $(
+            #[inline]
+            fn $method(self, value: $ty) -> Result<Value> {
+                self.$target(value as _)
+            }
+        )*
+    };
+}
+
+use super::JsonValueTrait;
 use crate::serde::tri;
 
 impl serde::Serializer for Serializer {
@@ -90,19 +102,10 @@ impl serde::Serializer for Serializer {
         Ok(Value::new_bool(value))
     }
 
-    #[inline]
-    fn serialize_i8(self, value: i8) -> Result<Value> {
-        self.serialize_i64(value as i64)
-    }
-
-    #[inline]
-    fn serialize_i16(self, value: i16) -> Result<Value> {
-        self.serialize_i64(value as i64)
-    }
-
-    #[inline]
-    fn serialize_i32(self, value: i32) -> Result<Value> {
-        self.serialize_i64(value as i64)
+    forward_to! {
+        serialize_i8(i8) => serialize_i64;
+        serialize_i16(i16) => serialize_i64;
+        serialize_i32(i32) => serialize_i64;
     }
 
     fn serialize_i64(self, value: i64) -> Result<Value> {
@@ -120,19 +123,10 @@ impl serde::Serializer for Serializer {
         }
     }
 
-    #[inline]
-    fn serialize_u8(self, value: u8) -> Result<Value> {
-        self.serialize_u64(value as u64)
-    }
-
-    #[inline]
-    fn serialize_u16(self, value: u16) -> Result<Value> {
-        self.serialize_u64(value as u64)
-    }
-
-    #[inline]
-    fn serialize_u32(self, value: u32) -> Result<Value> {
-        self.serialize_u64(value as u64)
+    forward_to! {
+        serialize_u8(u8) => serialize_u64;
+        serialize_u16(u16) => serialize_u64;
+        serialize_u32(u32) => serialize_u64;
     }
 
     #[inline]
@@ -151,22 +145,18 @@ impl serde::Serializer for Serializer {
     #[inline]
     fn serialize_f32(self, value: f32) -> Result<Value> {
         if value.is_finite() {
-            Ok(unsafe { Value::new_f64_unchecked(value as f64) })
+            Ok(Value::new_f64_unchecked(value as f64))
         } else {
-            Err(key_must_be_str_or_num(Unexpected::Other(
-                "NaN or Infinite f32",
-            )))
+            Ok(Value::new_null())
         }
     }
 
     #[inline]
     fn serialize_f64(self, value: f64) -> Result<Value> {
         if value.is_finite() {
-            Ok(unsafe { Value::new_f64_unchecked(value) })
+            Ok(Value::new_f64_unchecked(value))
         } else {
-            Err(key_must_be_str_or_num(Unexpected::Other(
-                "NaN or Infinite f64",
-            )))
+            Ok(Value::new_null())
         }
     }
 
@@ -223,8 +213,7 @@ impl serde::Serializer for Serializer {
         T: ?Sized + Serialize,
     {
         let mut object = Value::new_object_with(1);
-        let pair = (Value::from_static_str(variant), tri!(to_value(value)));
-        object.append_pair(pair);
+        object.insert(variant, tri!(to_value(value)));
         Ok(object)
     }
 
@@ -271,7 +260,7 @@ impl serde::Serializer for Serializer {
         len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
         Ok(SerializeTupleVariant {
-            static_name: Value::from_static_str(variant),
+            static_name: variant,
             vec: Value::new_array_with(len),
         })
     }
@@ -305,7 +294,7 @@ impl serde::Serializer for Serializer {
         len: usize,
     ) -> Result<Self::SerializeStructVariant> {
         Ok(SerializeStructVariant {
-            static_name: Value::from_static_str(variant),
+            static_name: variant,
             object: Value::new_object_with(len),
         })
     }
@@ -326,7 +315,7 @@ pub(crate) struct SerializeVec {
 
 /// Serializing Rust tuple variant into `Value`.
 pub(crate) struct SerializeTupleVariant {
-    static_name: Value,
+    static_name: &'static str,
     vec: Value,
 }
 
@@ -347,7 +336,7 @@ enum MapInner {
 
 /// Serializing Rust struct variant into `Value`.
 pub(crate) struct SerializeStructVariant {
-    static_name: Value,
+    static_name: &'static str,
     object: Value,
 }
 
@@ -414,7 +403,7 @@ impl serde::ser::SerializeTupleVariant for SerializeTupleVariant {
 
     fn end(self) -> Result<Value> {
         let mut object = Value::new_object_with(1);
-        object.append_pair((self.static_name, self.vec));
+        object.insert(self.static_name, self.vec);
         Ok(object)
     }
 }
@@ -446,7 +435,7 @@ impl serde::ser::SerializeMap for SerializeMap {
                 // Panic because this indicates a bug in the program rather than an
                 // expected failure.
                 let key = key.expect("serialize_value called before serialize_key");
-                object.append_pair((key, tri!(to_value(value))));
+                object.insert(key.as_str().unwrap(), tri!(to_value(value)));
                 Ok(())
             }
             MapInner::RawNumber { .. } => unreachable!(),
@@ -541,7 +530,7 @@ impl serde::Serializer for MapKeySerializer {
 
     fn serialize_f32(self, value: f32) -> Result<Value> {
         if value.is_finite() {
-            self.serialize_str(ryu::Buffer::new().format_finite(value))
+            self.serialize_str(zmij::Buffer::new().format_finite(value))
         } else {
             Err(float_key_must_be_finite())
         }
@@ -549,7 +538,7 @@ impl serde::Serializer for MapKeySerializer {
 
     fn serialize_f64(self, value: f64) -> Result<Value> {
         if value.is_finite() {
-            self.serialize_str(ryu::Buffer::new().format_finite(value))
+            self.serialize_str(zmij::Buffer::new().format_finite(value))
         } else {
             Err(float_key_must_be_finite())
         }
@@ -855,14 +844,13 @@ impl serde::ser::SerializeStructVariant for SerializeStructVariant {
     where
         T: ?Sized + Serialize,
     {
-        self.object
-            .append_pair((Value::from_static_str(key), tri!(to_value(value))));
+        self.object.insert(key, tri!(to_value(value)));
         Ok(())
     }
 
     fn end(self) -> Result<Value> {
         let mut object = Value::new_object_with(1);
-        object.append_pair((self.static_name, self.object));
+        object.insert(self.static_name, self.object);
         Ok(object)
     }
 }
@@ -884,8 +872,6 @@ mod test {
 
     #[test]
     fn test_to_value() {
-        use crate::{json, to_value, Value};
-
         let user = User {
             string: "hello".into(),
             number: 123,
@@ -912,7 +898,7 @@ mod test {
         map.insert(User::default(), 123);
 
         let got = to_value(&map);
-        println!("{:?}", got);
+        println!("{got:?}");
         assert!(got.is_err());
     }
 
@@ -947,5 +933,13 @@ mod test {
         value["arr"][2] = to_value(&args).unwrap_or_default();
 
         assert_eq!(value["arr"][2]["app_name"].as_str(), Some("test"));
+    }
+
+    #[test]
+    fn test_inf_or_nan_to_value() {
+        assert_eq!(to_value(&f64::INFINITY).unwrap(), Value::new_null());
+        assert_eq!(to_value(&f64::NAN).unwrap(), Value::new_null());
+        assert_eq!(to_value(&f32::INFINITY).unwrap(), Value::new_null());
+        assert_eq!(to_value(&f32::NAN).unwrap(), Value::new_null());
     }
 }
