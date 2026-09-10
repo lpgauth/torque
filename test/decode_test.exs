@@ -84,6 +84,28 @@ defmodule Torque.DecodeTest do
       assert {:ok, %{"k" => "str"}} = Torque.decode(~s({"k":1,"k":true,"k":"str"}))
     end
 
+    # Above 32 members ERTS builds a hash map. Before erlang/otp#10976,
+    # enif_make_map_from_arrays reported success for duplicate keys there and
+    # returned an invalid map, so both conversion paths check the map size and
+    # rebuild by insertion. Pattern-matching against a VM-built map catches a
+    # wrong representation that equality alone would miss.
+    test "duplicate keys in a hashmap-sized object still give the Erlang map" do
+      pairs = for i <- 1..40, do: {"k#{String.pad_leading(Integer.to_string(i), 2, "0")}", i}
+      dup = pairs ++ [{"k01", 999}, {"k40", 998}]
+      json = "{" <> Enum.map_join(dup, ",", fn {k, v} -> ~s("#{k}":#{v}) end) <> "}"
+      expected = Map.new(dup)
+
+      decoded = Torque.decode!(json)
+      assert decoded == expected
+      assert map_size(decoded) == 40
+      assert ^expected = decoded
+
+      {:ok, doc} = Torque.parse(json)
+      assert {:ok, got} = Torque.get(doc, "")
+      assert got == expected
+      assert ^expected = got
+    end
+
     test "invalid json returns error" do
       assert {:error, _reason} = Torque.decode("{invalid}")
     end
