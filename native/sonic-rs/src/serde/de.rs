@@ -18,7 +18,7 @@ use crate::{
     parser::{as_str, ParseStatus, ParsedSlice, Parser, Reference},
     reader::{Read, Reader},
     value::{node::Value, shared::Shared},
-    JsonInput,
+    JsonInput, OwnedLazyValue,
 };
 const MAX_ALLOWED_DEPTH: u8 = u8::MAX;
 
@@ -57,33 +57,6 @@ impl<'de, R: Reader<'de>> Deserializer<R> {
     /// ```
     pub fn use_rawnumber(mut self) -> Self {
         self.parser.cfg.use_rawnumber = true;
-        self
-    }
-
-    /// Parse all number as `RawNumber` and record the raw text for all JSON string.
-    ///
-    /// This will make sure the the serialize of `number` or `string` will retain from the origin
-    /// JSON text.
-    ///
-    /// # Example
-    /// ```
-    /// use sonic_rs::{Deserializer, Value};
-    /// let data = [
-    ///     r#"{"a":1.2345678901234567890123}"#,
-    ///     r#"{"a":1,"b":"\\u0001"}"#,
-    ///     r#"{"a":1,"b":"💎"}"#,
-    ///     r#"{"\\u0001":1,"b":"\\u0001"}"#,
-    /// ];
-    ///
-    /// for json in data {
-    ///     let mut de = Deserializer::from_str(json).use_raw();
-    ///     let value: Value = de.deserialize().unwrap();
-    ///     let out = sonic_rs::to_string(&value).unwrap();
-    ///     assert_eq!(json, out);
-    /// }
-    /// ```
-    pub fn use_raw(mut self) -> Self {
-        self.parser.cfg.use_raw = true;
         self
     }
 
@@ -155,6 +128,14 @@ impl<'de, R: Reader<'de>> Deserializer<R> {
             lifetime: PhantomData,
             is_ending: false,
         }
+    }
+
+    /// The `Deserializer::end` method should be called after a value has been fully deserialized.
+    /// This allows the `Deserializer` to validate that the input stream is at the end or that it
+    /// only has trailing whitespace.
+    pub fn end(&mut self) -> Result<()> {
+        tri!(self.parser.parse_trailing());
+        Ok(())
     }
 }
 
@@ -241,23 +222,20 @@ macro_rules! tri {
 
 pub(crate) use tri;
 
-struct DepthGuard<'a, R> {
-    de: &'a mut Deserializer<R>,
-}
-
-impl<'a, 'de, R: Reader<'de>> DepthGuard<'a, R> {
-    fn guard(de: &'a mut Deserializer<R>) -> Result<Self> {
-        de.remaining_depth -= 1;
-        if de.remaining_depth == 0 {
-            return Err(de.parser.error(RecursionLimitExceeded));
+impl<'de, R: Reader<'de>> Deserializer<R> {
+    /// Ensures recursion depth limit; calls `f` with `self` and restores depth on return.
+    #[inline]
+    fn with_depth_limit<F, T>(&mut self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self) -> Result<T>,
+    {
+        self.remaining_depth -= 1;
+        if self.remaining_depth == 0 {
+            return Err(self.parser.error(RecursionLimitExceeded));
         }
-        Ok(Self { de })
-    }
-}
-
-impl<'a, R> Drop for DepthGuard<'a, R> {
-    fn drop(&mut self) {
-        self.de.remaining_depth += 1;
+        let result = f(self);
+        self.remaining_depth += 1;
+        result
     }
 }
 
@@ -293,6 +271,12 @@ macro_rules! impl_deserialize_number {
 
 // some functions only used for struct visitors.
 impl<'de, R: Reader<'de>> Deserializer<R> {
+    /// Fix error position for deserialized results.
+    #[inline]
+    fn fix_position<T>(&self, result: Result<T>) -> Result<T> {
+        result.map_err(|err| self.parser.fix_position(err))
+    }
+
     pub(crate) fn deserialize_number<V>(&mut self, visitor: V) -> Result<V::Value>
     where
         V: de::Visitor<'de>,
@@ -307,10 +291,7 @@ impl<'de, R: Reader<'de>> Deserializer<R> {
         };
 
         // fixed error position if not matched type
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     #[cold]
@@ -318,11 +299,11 @@ impl<'de, R: Reader<'de>> Deserializer<R> {
         self.parser.peek_invalid_type(peek, exp)
     }
 
-    fn end_seq(&mut self) -> Result<()> {
+    pub fn end_seq(&mut self) -> Result<()> {
         self.parser.parse_array_end()
     }
 
-    fn end_map(&mut self) -> Result<()> {
+    pub fn end_map(&mut self) -> Result<()> {
         match self.parser.skip_space() {
             Some(b'}') => Ok(()),
             Some(b',') => Err(self.parser.error(ErrorCode::TrailingComma)),
@@ -361,11 +342,28 @@ impl<'de, R: Reader<'de>> Deserializer<R> {
     where
         V: de::Visitor<'de>,
     {
-        let (raw, status) = self.parser.skip_one()?;
+        let (raw, status) = self.parser.skip_one(true)?;
         if status == ParseStatus::HasEscaped {
             visitor.visit_str(as_str(raw))
         } else {
             visitor.visit_borrowed_str(as_str(raw))
+        }
+    }
+
+    fn deserialize_owned_lazyvalue<V>(&mut self, visitor: V) -> Result<V::Value>
+    where
+        V: de::Visitor<'de>,
+    {
+        let val = ManuallyDrop::new(self.parser.get_owned_lazyvalue(true)?);
+        // #Safety
+        // the json is validate before parsing json, and we pass the document using visit_bytes
+        // here.
+        unsafe {
+            let binary = &*slice_from_raw_parts(
+                &val as *const _ as *const u8,
+                std::mem::size_of::<OwnedLazyValue>(),
+            );
+            visitor.visit_bytes(binary)
         }
     }
 
@@ -394,7 +392,11 @@ impl<'de, R: Reader<'de>> Deserializer<R> {
                     self.shared = Some(Arc::new(Shared::default()));
                 }
                 let shared = self.shared.as_mut().unwrap();
-                &mut *(Arc::as_ptr(shared) as *mut _)
+                let ptr = Arc::as_ptr(shared);
+                // Expose Arc allocation provenance for pack_shared's
+                // Arc::increment_strong_count (needs access via with_exposed_provenance).
+                ptr.expose_provenance();
+                &mut *(ptr as *mut _)
             };
             // deserialize some json parts into `Value`, not use padding buffer, avoid the memory
             // copy
@@ -419,11 +421,8 @@ impl<'de, R: Reader<'de>> Deserializer<R> {
     {
         let raw = match self.parser.skip_space_peek() {
             Some(c @ b'-' | c @ b'0'..=b'9') => {
-                let start = self.parser.read.index();
                 self.parser.read.eat(1);
-                self.parser.skip_number(c)?;
-                let end = self.parser.read.index();
-                as_str(self.parser.read.slice_unchecked(start, end))
+                self.parser.skip_number(c)?
             }
             Some(b'"') => {
                 self.parser.read.eat(1);
@@ -474,25 +473,19 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
                 visitor.visit_bool(false)
             }
             c @ b'-' | c @ b'0'..=b'9' => visit_number(&tri!(self.parser.parse_number(c)), visitor),
-            b'"' => match tri!(self.parser.parse_str_impl(&mut self.scratch)) {
+            b'"' => match tri!(self.parser.parse_str(&mut self.scratch)) {
                 Reference::Borrowed(s) => visitor.visit_borrowed_str(s),
                 Reference::Copied(s) => visitor.visit_str(s),
             },
             b'[' => {
-                let ret = {
-                    let _ = DepthGuard::guard(self);
-                    visitor.visit_seq(SeqAccess::new(self))
-                };
+                let ret = self.with_depth_limit(|de| visitor.visit_seq(SeqAccess::new(de)));
                 match (ret, self.end_seq()) {
                     (Ok(ret), Ok(())) => Ok(ret),
                     (Err(err), _) | (_, Err(err)) => Err(err),
                 }
             }
             b'{' => {
-                let ret = {
-                    let _ = DepthGuard::guard(self);
-                    visitor.visit_map(MapAccess::new(self))
-                };
+                let ret = self.with_depth_limit(|de| visitor.visit_map(MapAccess::new(de)));
                 match (ret, self.end_map()) {
                     (Ok(ret), Ok(())) => Ok(ret),
                     (Err(err), _) | (_, Err(err)) => Err(err),
@@ -532,10 +525,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
             _ => Err(self.peek_invalid_type(peek, &visitor)),
         };
 
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     impl_deserialize_number!(deserialize_i8);
@@ -574,10 +564,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
             }
         };
 
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     fn deserialize_u128<V>(self, visitor: V) -> Result<V::Value>
@@ -604,10 +591,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
             }
         };
 
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     fn deserialize_char<V>(self, visitor: V) -> Result<V::Value>
@@ -626,17 +610,14 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
         };
 
         let value = match peek {
-            b'"' => match tri!(self.parser.parse_str_impl(&mut self.scratch)) {
+            b'"' => match tri!(self.parser.parse_str(&mut self.scratch)) {
                 Reference::Borrowed(s) => visitor.visit_borrowed_str(s),
                 Reference::Copied(s) => visitor.visit_str(s),
             },
             _ => Err(self.peek_invalid_type(peek, &visitor)),
         };
 
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value>
@@ -672,10 +653,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
 
         // check invalid utf8 with allow space here
         let _ = self.parser.check_invalid_utf8(true)?;
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     #[inline]
@@ -718,10 +696,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
             _ => Err(self.peek_invalid_type(peek, &visitor)),
         };
 
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     fn deserialize_unit_struct<V>(self, _name: &'static str, visitor: V) -> Result<V::Value>
@@ -742,6 +717,8 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
                 return self.deserialize_rawnumber(visitor);
             } else if name == crate::lazyvalue::TOKEN {
                 return self.deserialize_lazyvalue(visitor);
+            } else if name == crate::lazyvalue::OWNED_LAZY_VALUE_TOKEN {
+                return self.deserialize_owned_lazyvalue(visitor);
             } else if name == crate::value::de::TOKEN {
                 return self.deserialize_value(visitor);
             }
@@ -761,10 +738,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
 
         let value = match peek {
             b'[' => {
-                let ret = {
-                    let _ = DepthGuard::guard(self);
-                    visitor.visit_seq(SeqAccess::new(self))
-                };
+                let ret = self.with_depth_limit(|de| visitor.visit_seq(SeqAccess::new(de)));
                 match (ret, self.end_seq()) {
                     (Ok(ret), Ok(())) => Ok(ret),
                     (Err(err), _) | (_, Err(err)) => Err(err),
@@ -772,10 +746,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
             }
             _ => return Err(self.peek_invalid_type(peek, &visitor)),
         };
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value>
@@ -807,10 +778,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
 
         let value = match peek {
             b'{' => {
-                let ret = {
-                    let _ = DepthGuard::guard(self);
-                    visitor.visit_map(MapAccess::new(self))
-                };
+                let ret = self.with_depth_limit(|de| visitor.visit_map(MapAccess::new(de)));
                 match (ret, self.end_map()) {
                     (Ok(ret), Ok(())) => Ok(ret),
                     (Err(err), _) | (_, Err(err)) => Err(err),
@@ -818,10 +786,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
             }
             _ => return Err(self.peek_invalid_type(peek, &visitor)),
         };
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     fn deserialize_struct<V>(
@@ -839,20 +804,14 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
 
         let value = match peek {
             b'[' => {
-                let ret = {
-                    let _ = DepthGuard::guard(self);
-                    visitor.visit_seq(SeqAccess::new(self))
-                };
+                let ret = self.with_depth_limit(|de| visitor.visit_seq(SeqAccess::new(de)));
                 match (ret, self.end_seq()) {
                     (Ok(ret), Ok(())) => Ok(ret),
                     (Err(err), _) | (_, Err(err)) => Err(err),
                 }
             }
             b'{' => {
-                let ret = {
-                    let _ = DepthGuard::guard(self);
-                    visitor.visit_map(MapAccess::new(self))
-                };
+                let ret = self.with_depth_limit(|de| visitor.visit_map(MapAccess::new(de)));
                 match (ret, self.end_map()) {
                     (Ok(ret), Ok(())) => Ok(ret),
                     (Err(err), _) | (_, Err(err)) => Err(err),
@@ -861,10 +820,7 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
             _ => return Err(self.peek_invalid_type(peek, &visitor)),
         };
 
-        match value {
-            Ok(value) => Ok(value),
-            Err(err) => Err(self.parser.fix_position(err)),
-        }
+        self.fix_position(value)
     }
 
     /// Parses an enum as an object like `{"$KEY":$VALUE}`, where $VALUE is either a straight
@@ -882,10 +838,8 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
         match self.parser.skip_space_peek() {
             Some(b'{') => {
                 self.parser.read.eat(1);
-                let value = {
-                    let _ = DepthGuard::guard(self);
-                    tri!(visitor.visit_enum(VariantAccess::new(self)))
-                };
+                let value =
+                    self.with_depth_limit(|de| visitor.visit_enum(VariantAccess::new(de)))?;
 
                 match self.parser.skip_space() {
                     Some(b'}') => Ok(value),
@@ -910,19 +864,19 @@ impl<'de, 'a, R: Reader<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> 
     where
         V: de::Visitor<'de>,
     {
-        // NOTE: we use faster skip, and will not validate the skipped parts.
-        tri!(self.parser.skip_one());
+        // Skip the ignored value with full validation.
+        tri!(self.parser.skip_one(true));
         visitor.visit_unit()
     }
 }
 
-struct SeqAccess<'a, R: 'a> {
+pub struct SeqAccess<'a, R: 'a> {
     de: &'a mut Deserializer<R>,
     first: bool, // first is marked as
 }
 
 impl<'a, R: 'a> SeqAccess<'a, R> {
-    fn new(de: &'a mut Deserializer<R>) -> Self {
+    pub fn new(de: &'a mut Deserializer<R>) -> Self {
         SeqAccess { de, first: true }
     }
 }
@@ -954,13 +908,13 @@ impl<'de, 'a, R: Reader<'de> + 'a> de::SeqAccess<'de> for SeqAccess<'a, R> {
     }
 }
 
-struct MapAccess<'a, R: 'a> {
+pub struct MapAccess<'a, R: 'a> {
     de: &'a mut Deserializer<R>,
     first: bool,
 }
 
 impl<'a, R: 'a> MapAccess<'a, R> {
-    fn new(de: &'a mut Deserializer<R>) -> Self {
+    pub fn new(de: &'a mut Deserializer<R>) -> Self {
         MapAccess { de, first: true }
     }
 }
@@ -1201,7 +1155,7 @@ where
         V: de::Visitor<'de>,
     {
         self.de.scratch.clear();
-        match tri!(self.de.parser.parse_str_impl(&mut self.de.scratch)) {
+        match tri!(self.de.parser.parse_str(&mut self.de.scratch)) {
             Reference::Borrowed(s) => visitor.visit_borrowed_str(s),
             Reference::Copied(s) => visitor.visit_str(s),
         }
@@ -1308,12 +1262,12 @@ where
     R: Reader<'de>,
     T: de::Deserialize<'de>,
 {
-    // check JSON size, because the design of `sonic_rs::Value`, parsing JSON larger than 2 GB is
+    // check JSON size, because the design of `sonic_rs::Value`, parsing JSON larger than 4 GB is
     // not supported
     let len = read.as_u8_slice().len();
-    if len >= (1 << 32) {
+    if len > u32::MAX as _ {
         return Err(crate::error::make_error(format!(
-            "Only support JSON less than 2 GB, the input JSON is too large here, len is {len}"
+            "Only support JSON less than 4 GB, the input JSON is too large here, len is {len}"
         )));
     }
 
@@ -1321,11 +1275,6 @@ where
     #[cfg(feature = "arbitrary_precision")]
     {
         de = de.use_rawnumber();
-    }
-
-    #[cfg(feature = "use_raw")]
-    {
-        de = de.use_raw();
     }
 
     #[cfg(feature = "utf8_lossy")]
@@ -1369,4 +1318,68 @@ where
     T: de::Deserialize<'a>,
 {
     from_trait(Read::new(s.as_bytes(), false))
+}
+
+/// Deserialize an instance of type `T` from a Reader
+pub fn from_reader<R, T>(mut reader: R) -> Result<T>
+where
+    R: std::io::Read,
+    T: de::DeserializeOwned,
+{
+    let mut data = Vec::new();
+    if let Err(e) = reader.read_to_end(&mut data) {
+        return Err(Error::io(e));
+    };
+    from_slice(data.as_slice())
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{object, Value};
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn test_recursion_depth_limit() {
+        // MAX_ALLOWED_DEPTH is 255; nesting 256 levels returns RecursionLimitExceeded.
+        // Use serde_json::Value so we go through the recursive path
+        // (sonic_rs::Value may use a fast path when index==0).
+        std::thread::Builder::new()
+            .name("test_recursion_depth_limit".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let depth = 256;
+                let src = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+                let err = crate::from_str::<serde_json::Value>(&src).unwrap_err();
+                assert!(matches!(
+                    err.error_code(),
+                    crate::error::ErrorCode::RecursionLimitExceeded
+                ));
+            })
+            .expect("failed to spawn test thread")
+            .join()
+            .expect("test thread panicked");
+    }
+
+    #[test]
+    fn test_value_as_deserializer() {
+        let json = r#"{"a": 1, "b": 2}"#;
+        let mut de = crate::Deserializer::new(crate::Read::from(json));
+
+        let res: Value = de.deserialize().unwrap();
+        assert_eq!(res, object! { "a": 1, "b": 2 });
+        assert_eq!(de.parser.read.index, 16);
+
+        let res = de.end();
+        assert!(res.is_ok());
+
+        let json = r#"{"a": 1, "b": 2}123"#;
+        let mut de = crate::Deserializer::new(crate::Read::from(json));
+
+        let res: Value = de.deserialize().unwrap();
+        assert_eq!(res, object! { "a": 1, "b": 2 });
+        assert_eq!(de.parser.read.index, 16);
+
+        let res = de.end();
+        assert!(res.is_err());
+    }
 }

@@ -1,5 +1,5 @@
-# Vendored copy of sonic-rs 0.3.17 with a minimal Torque patch:
-#   * `JsonVisitor` and `RawStr` made public + re-exported
+# Vendored copy of sonic-rs 0.5.8 with a minimal Torque patch:
+#   * `JsonVisitor` made public + re-exported
 #   * `parse_into_visitor` entry added, so Torque can build Erlang terms
 #     directly during the native SIMD parse (one pass, zero-copy strings)
 #     instead of going through the slower serde path
@@ -8,9 +8,12 @@
 #   * a `JsonVisitor::visit_overflow_int` hook: integer-shaped tokens that
 #     overflow i64/u64 are routed to it with the raw digits (default falls
 #     back to f64), so Torque can build exact Erlang bignums during decode
-#   * object keys in the visitor parse (`parse_object2`) are delivered via
-#     `visit_key` instead of `visit_str` (defaults forward to the str hooks),
-#     so Torque can reuse the term for a key repeated across sibling objects
+#   * object keys in the visitor parse (`parse_object`) are delivered via
+#     `visit_key`/`visit_borrowed_key` instead of the str hooks (defaults
+#     forward to the str hooks), so Torque can reuse the term for a key
+#     repeated across sibling objects
+#   * `Object::get_last` added: reverse-scan lookup so a duplicate key resolves
+#     to its last value (0.5's object iterator is no longer double-ended)
 # Upstream: https://github.com/cloudwego/sonic-rs (Apache-2.0)
 
 # Standalone manifest so this is not pulled into the torque workspace.
@@ -19,7 +22,7 @@
 [package]
 edition = "2021"
 name = "sonic-rs"
-version = "0.3.17"
+version = "0.5.8"
 authors = ["Volo Team <volo@cloudwego.io>"]
 build = false
 autobins = false
@@ -35,22 +38,25 @@ name = "sonic_rs"
 path = "src/lib.rs"
 
 [dependencies]
-bumpalo = "3.13"
-bytes = "1.9"
+ahash = "0.8"
+bumpalo = "3.19"
+bytes = "1.10"
 cfg-if = "1.0"
 faststr = { version = "0.2", features = ["serde"] }
 itoa = "1.0"
 ref-cast = "1.0"
-ryu = "1.0"
 serde = { version = "1.0", features = ["rc", "derive"] }
 simdutf8 = "0.1"
 sonic-number = "0.1"
 sonic-simd = "0.1"
 thiserror = "2.0"
+zmij = "1.0"
 
 [features]
 arbitrary_precision = []
+avx512 = ["sonic-simd/avx512"]
 default = []
+non_trailing_zero = []
+sanitize = []
 sort_keys = []
-use_raw = []
 utf8_lossy = []

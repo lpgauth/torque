@@ -1,8 +1,9 @@
 use core::mem::size_of;
+#[cfg(feature = "sort_keys")]
+use std::collections::BTreeMap;
 use std::{
     alloc::Layout,
     fmt::{Debug, Display, Formatter},
-    marker::PhantomData,
     mem::{transmute, ManuallyDrop},
     ptr::NonNull,
     slice::from_raw_parts,
@@ -10,13 +11,11 @@ use std::{
     sync::Arc,
 };
 
-use bumpalo::Bump;
+#[cfg(not(feature = "sort_keys"))]
+use ahash::AHashMap;
 use faststr::FastStr;
 use ref_cast::RefCast;
-use serde::{
-    ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct},
-    Serializer,
-};
+use serde::ser::{Serialize, SerializeMap, SerializeSeq};
 
 use super::{
     object::Pair,
@@ -63,8 +62,19 @@ use crate::{
 ///
 /// # Notes
 ///
-/// Actually the lookup in `Value` is O(n), not O(1). If you want to use `Value` as a map, recommend
-/// to use `serde_json::Value`.
+/// Not use any unsafe invalid_reference_casting for `Value`, it will cause UB.
+///
+/// ```rust,no_run
+/// use sonic_rs::{from_str, Value};
+/// let json = r#"["a", "b", "c"]"#;
+/// let root: Value = from_str(json).unwrap();
+/// let immref = &root["b"];
+///
+/// // This is dangerous, will coredump when using sanitizer
+/// #[allow(invalid_reference_casting)]
+/// let ub_cast = unsafe { &mut *(immref as *const _ as *mut Value) };
+/// let _ub = std::mem::take(ub_cast);
+/// ```
 #[repr(C)]
 pub struct Value {
     pub(crate) meta: Meta,
@@ -73,35 +83,35 @@ pub struct Value {
 
 #[rustfmt::skip]
 // A compact and mutable JSON Value.
-//  
+//
 //  Thera are three kind nodes into the Value:
 //  - Static Node: no need drop
 //  - Owned Node : mutable
 //  - Shared Node: in SharedDom, not mutable
 //
-// | Kind        | 3 bits | 5 bits |       24 bits     |     ---->  32 bits ---->       |   32 bits   |  32 bits  |       limit          |
-// |-------------|-----------------|-------------------|--------------------------------|-------------------------|----------------------|
-// |  Null       |   0    |   0    |                                                    +                         |                      |
-// |  True       |   0    |   1    |                                                    +                         |                      |
-// |  False      |   0    |   2    |                                                    +                         |                      |
-// |  I64        |   0    |   3    |                                                    +           i64           |                      |
-// |  U64        |   0    |   4    |                                                    +           u64           |                      |
-// |  F64        |   0    |   5    |                                                    +           f64           |                      |
-// | empty arr   |   0    |   6    |                                                                              |
-// | empty obj   |   0    |   7    |                                                                              |
-// | static str  |   0    |   8    |                   |           string length        +         *const u8       | excced will fallback |
-// |  faststr    |   1    |   0    |                                                    +       Box<FastStr>      |                      |
-// |rawnum_fastst|   1    |   1    |                                                    +       Box<FastStr>      |                      |
-// |  arr_mut    |   1    |   2    |                                                    +       Box<Vec<Node>>    |                      |
-// |  obj_mut    |   1    |   3    |                                                    +       Box<Vec<Pair>>    |                      |
-// |  str_node   |   2    |        node idx            |           string length        +         *const u8       |    max len 2^32      |
-// | raw_num_node|   3    |        node idx            |           string length        +         *const u8       |    max len 2^32      |
-// |  arr_node   |   4    |        node idx            |           array length         +         *const Node     |    max len 2^32      |
-// |  obj_node   |   5    |        node idx            |           object length        +         *const Pair     |    max len 2^32      |
-// |str_esc_raw  |   6    |   *const RawStrHeader (in SharedDom, MUST aligned 8)        +         *const u8       |                      |
-// | root_node   |   7    |      *const ShardDom (from Arc, MUST aligned 8)             +     *const Node (head)  |                      |
+// |  Kind        | 3 bits | 5 bits |       24 bits     |     ---->  32 bits ---->       |    32 bits    |    32 bits    |       limit          |
+// |--------------|-----------------|-------------------|--------------------------------|-------------------------------|----------------------|
+// |   Null       |   0    |   0    |                                                    +                               |                      |
+// |   True       |   0    |   1    |                                                    +                               |                      |
+// |   False      |   0    |   2    |                                                    +                               |                      |
+// |   I64        |   0    |   3    |                                                    +             i64               |                      |
+// |   U64        |   0    |   4    |                                                    +             u64               |                      |
+// |   F64        |   0    |   5    |                                                    +             f64               |                      |
+// |  empty arr   |   0    |   6    |                                                                                    |
+// |  empty obj   |   0    |   7    |                                                                                    |
+// |  static str  |   0    |   8    |                   |           string length        +          *const u8            | excced will fallback |
+// |   faststr    |   1    |   0    |                                                    +         Box<FastStr>          |                      |
+// |rawnum_faststr|   1    |   1    |                                                    +         Box<FastStr>          |                      |
+// |   arr_mut    |   1    |   2    |                                                    +        Arc<Vec<Node>>         |                      |
+// |   obj_mut    |   1    |   3    |                                                    + Arc<AHashMap<FastStr, Value>> |                      |
+// |   str_node   |   2    |        node idx            |           string length        +          *const u8            |    max len 2^32      |
+// | raw_num_node |   3    |        node idx            |           string length        +          *const u8            |    max len 2^32      |
+// |   arr_node   |   4    |        node idx            |           array length         +          *const Node          |    max len 2^32      |
+// |   obj_node   |   5    |        node idx            |           object length        +          *const Pair          |    max len 2^32      |
+// |   _reserved  |   6    |
+// |  root_node   |   7    |      *const ShardDom (from Arc, MUST aligned 8)             +      *const Node (head)       |                      |
 //
-// NB: we will check the JSON length when parsing, if JSON is > 2GB, will return a error, so we will not check the limits when parsing or using dom.
+// NB: we will check the JSON length when parsing, if JSON is >= 4GB, will return a error, so we will not check the limits when parsing or using dom.
 #[allow(clippy::box_collection)]
 #[repr(C)]
 pub(crate) union Data {
@@ -117,93 +127,54 @@ pub(crate) union Data {
     pub(crate) root: NonNull<Value>,
 
     pub(crate) str_own: ManuallyDrop<Box<FastStr>>,
-    pub(crate) obj_own: ManuallyDrop<Box<Vec<Pair>>>,
-    pub(crate) arr_own: ManuallyDrop<Box<Vec<Value>>>,
+    #[cfg(not(feature = "sort_keys"))]
+    pub(crate) obj_own: ManuallyDrop<Arc<AHashMap<FastStr, Value>>>,
+    #[cfg(feature="sort_keys")]
+    pub(crate) obj_own: ManuallyDrop<Arc<BTreeMap<FastStr, Value>>>,
+    pub(crate) arr_own: ManuallyDrop<Arc<Vec<Value>>>,
 
     pub(crate) parent: u64,
 }
 
-/// inlined string, avoid boxed allocation
+/// Compact metadata for a `Value` node.
+///
+/// On 64-bit targets this is a union of `u64` and `*const Shared`.
+/// Using a union preserves pointer provenance through storage, enabling
+/// strict-provenance-compatible round-trips for the root_node variant
+/// without needing `expose_provenance` / `with_exposed_provenance`.
+///
+/// On 32-bit targets (e.g. wasm32) the pointer is only 4 bytes while `val`
+/// is 8 bytes, so writing through a `ptr` field would leave the upper half
+/// uninitialized — reading back via `val` would be UB.  Therefore on 32-bit
+/// we fall back to a plain `u64` struct with exposed provenance for the
+/// root_node round-trip.
+///
+/// All non-root variants always read/write through the `val` field.
+/// The root variant writes/reads through the `ptr` field (64-bit) or
+/// through `val` with expose/recover (32-bit).
 #[derive(Copy, Clone)]
-#[repr(transparent)]
-pub struct RawStr<'a> {
-    ptr: NonNull<RawStrHeader>,
-    _life: PhantomData<&'a mut [u8]>,
-}
-
-// TODO: make sure this safer and clear
-impl<'a> RawStr<'a> {
-    pub fn as_str(&self, ptr: *const u8 /* str pointer */) -> &'a str {
-        unsafe {
-            let len = self.ptr.as_ref().str_len as usize;
-            str_from_raw_parts(ptr, len)
-        }
-    }
-
-    pub fn as_raw(&self) -> &'a str {
-        unsafe {
-            let len = self.ptr.as_ref().raw_len as usize;
-            let ptr = self.ptr.as_ptr().add(1) as *const u8;
-            str_from_raw_parts(ptr, len)
-        }
-    }
-
-    pub fn get_idx(&self) -> u32 {
-        unsafe { self.ptr.as_ref() }.node_idx
-    }
-
-    unsafe fn set_str_len(&mut self, str_len: usize) {
-        let hdr = self.ptr.as_mut();
-        hdr.str_len = str_len as u32;
-    }
-
-    unsafe fn set_index(&mut self, idx: usize) {
-        let hdr = self.ptr.as_mut();
-        hdr.node_idx = idx as u32;
-    }
-
-    pub(crate) unsafe fn new_in(alloc: &mut Bump, raw: &str) -> RawStr<'static> {
-        let data_size = raw.len();
-        let hdr_size = size_of::<RawStrHeader>();
-        // aligned to hder, make sure tagged pointer in Meta
-        let align = std::mem::align_of::<RawStrHeader>();
-        let layout = Layout::from_size_align(hdr_size + data_size, align).unwrap();
-        let hdr = alloc.alloc_layout(layout).as_ptr() as *mut RawStrHeader;
-        hdr.write(RawStrHeader {
-            node_idx: 0, // write later
-            str_len: 0,  // write later
-            raw_len: data_size as u32,
-        });
-        let dst = hdr.add(1) as *mut u8;
-        std::ptr::copy_nonoverlapping(raw.as_ptr(), dst, data_size);
-        RawStr {
-            ptr: NonNull::new_unchecked(hdr),
-            _life: PhantomData,
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-#[repr(C, align(8))]
-pub(crate) struct RawStrHeader {
-    node_idx: u32,
-    str_len: u32,
-    raw_len: u32,
-}
-
-#[derive(Debug)]
-pub(crate) struct UnpackedRawStr<'a> {
-    pub raw: &'a str,
-    pub str: &'a str,
-}
-
-#[derive(Copy, Clone)]
+#[cfg(target_pointer_width = "64")]
 #[repr(C)]
 pub(crate) union Meta {
-    shared: NonNull<Shared>,
-    typ: u64,
+    val: u64,
+    ptr: *const Shared,
+}
+
+#[derive(Copy, Clone)]
+#[cfg(not(target_pointer_width = "64"))]
+#[repr(transparent)]
+pub(crate) struct Meta {
     val: u64,
 }
+
+// Safety: Meta contains either a plain integer or a pointer derived from
+// Arc<Shared> (which is Send+Sync). The pointer is never dereferenced
+// through Meta directly — it is only unpacked and used behind Arc's
+// reference counting.
+#[cfg(target_pointer_width = "64")]
+unsafe impl Send for Meta {}
+#[cfg(target_pointer_width = "64")]
+unsafe impl Sync for Meta {}
 
 impl Meta {
     const STAIC_NODE: u64 = 0;
@@ -227,7 +198,6 @@ impl Meta {
     const RAWNUM_NODE: u64 = 3;
     const ARR_NODE: u64 = 4;
     const OBJ_NODE: u64 = 5;
-    const ESC_RAW_NODE: u64 = 6;
 
     const ROOT_NODE: u64 = 7;
 
@@ -243,7 +213,7 @@ impl Meta {
 
 impl Meta {
     pub const fn new(typ: u64) -> Self {
-        Self { typ }
+        Self { val: typ }
     }
 
     fn pack_dom_node(kind: u64, idx: u32, len: u32) -> Self {
@@ -264,35 +234,65 @@ impl Meta {
         Self { val }
     }
 
+    /// Pack a `*const Shared` pointer into a root Meta node.
+    ///
+    /// On 64-bit: stores the tagged pointer through the union `ptr` field,
+    /// preserving provenance (strict-provenance compatible).
+    ///
+    /// On 32-bit: stores through `val` as a u64, using exposed provenance
+    /// for the Arc::increment_strong_count call.  The pointer address fits
+    /// in the low 32 bits of the u64.
+    #[cfg(target_pointer_width = "64")]
     fn pack_shared(ptr: *const Shared) -> Self {
-        unsafe { Arc::increment_strong_count(ptr) };
-        let addr = ptr as usize as u64;
-        let val = addr | Self::ROOT_NODE;
+        // Arc::increment_strong_count needs provenance covering the full
+        // Arc allocation (header + data). The caller's ptr may come from
+        // &Shared (narrow provenance), so the Arc allocation must be exposed
+        // beforehand (done in parse_with_padding / Deserializer).
+        let addr = ptr.expose_provenance();
+        let wide_ptr = std::ptr::with_exposed_provenance::<Shared>(addr);
+        unsafe { Arc::increment_strong_count(wide_ptr) };
+        // Store tagged pointer through the union ptr field — provenance preserved.
+        let tagged = ptr.map_addr(|a| a | Self::ROOT_NODE as usize);
+        Self { ptr: tagged }
+    }
+
+    #[cfg(not(target_pointer_width = "64"))]
+    fn pack_shared(ptr: *const Shared) -> Self {
+        let addr = ptr.expose_provenance();
+        let wide_ptr = std::ptr::with_exposed_provenance::<Shared>(addr);
+        unsafe { Arc::increment_strong_count(wide_ptr) };
+        let val = addr as u64 | Self::ROOT_NODE;
         Self { val }
     }
 
-    fn pack_rawstr(raw: RawStr) -> Self {
-        let addr = raw.ptr.as_ptr() as usize as u64;
-        let val = addr | Self::ESC_RAW_NODE;
-        Self { val }
+    /// Read the integer representation of this Meta.
+    #[inline(always)]
+    #[cfg(target_pointer_width = "64")]
+    fn read_val(&self) -> u64 {
+        // Safety: reading `val` when `ptr` was written is sound on 64-bit —
+        // both fields are 8 bytes and we only inspect integer bits.
+        unsafe { self.val }
+    }
+
+    #[inline(always)]
+    #[cfg(not(target_pointer_width = "64"))]
+    fn read_val(&self) -> u64 {
+        self.val
     }
 
     fn get_kind(&self) -> u64 {
-        let val = unsafe { self.val };
-        val & 0x7
+        self.read_val() & Self::KIND_MASK
     }
 
     fn get_type(&self) -> u64 {
-        let val = unsafe { self.val };
+        let val = self.read_val();
         let typ = val & Self::TYPE_MASK;
-        let kind = self.get_kind();
+        let kind = val & Self::KIND_MASK;
         match kind {
             Self::STAIC_NODE | Self::OWNED_NODE => typ,
-            Self::STR_NODE
-            | Self::RAWNUM_NODE
-            | Self::ESC_RAW_NODE
-            | Self::ARR_NODE
-            | Self::OBJ_NODE => typ & Self::KIND_MASK,
+            Self::STR_NODE | Self::RAWNUM_NODE | Self::ARR_NODE | Self::OBJ_NODE => {
+                typ & Self::KIND_MASK
+            }
             Self::ROOT_NODE => typ & Self::KIND_MASK,
             _ => unreachable!("unknown kind {kind}"),
         }
@@ -300,7 +300,7 @@ impl Meta {
 
     fn unpack_dom_node(&self) -> NodeMeta {
         debug_assert!(self.in_shared());
-        let val = unsafe { self.val };
+        let val = self.read_val();
         let idx = (val & Self::IDX_MASK) >> Self::KIND_BITS;
         let len = val >> Self::LEN_OFFSET;
         NodeMeta {
@@ -309,21 +309,21 @@ impl Meta {
         }
     }
 
+    /// Recover the `*const Shared` from a root Meta node.
+    ///
+    /// On 64-bit: reads through the union `ptr` field (provenance preserved).
+    /// On 32-bit: recovers via `with_exposed_provenance`.
+    #[cfg(target_pointer_width = "64")]
     fn unpack_root(&self) -> *const Shared {
         debug_assert!(self.get_kind() == Self::ROOT_NODE);
-        let val = unsafe { self.val };
-        let addr = (val & !Self::ROOT_NODE) as usize;
-        addr as *const Shared
+        unsafe { self.ptr.map_addr(|a| a & !(Self::ROOT_NODE as usize)) }
     }
 
-    fn unpack_rawstr_node(&self) -> RawStr<'_> {
-        debug_assert!(self.get_kind() == Self::ESC_RAW_NODE);
-        let val = unsafe { self.val };
-        let addr = (val & !Self::ESC_RAW_NODE) as usize;
-        RawStr {
-            ptr: unsafe { NonNull::new_unchecked(addr as *mut RawStrHeader) },
-            _life: PhantomData,
-        }
+    #[cfg(not(target_pointer_width = "64"))]
+    fn unpack_root(&self) -> *const Shared {
+        debug_assert!(self.get_kind() == Self::ROOT_NODE);
+        let addr = (self.val & !Self::ROOT_NODE) as usize;
+        std::ptr::with_exposed_provenance::<Shared>(addr)
     }
 
     fn has_strlen(&self) -> bool {
@@ -336,18 +336,13 @@ impl Meta {
     fn in_shared(&self) -> bool {
         matches!(
             self.get_type(),
-            Self::STR_NODE
-                | Self::RAWNUM_NODE
-                | Self::ESC_RAW_NODE
-                | Self::ARR_NODE
-                | Self::OBJ_NODE
+            Self::STR_NODE | Self::RAWNUM_NODE | Self::ARR_NODE | Self::OBJ_NODE
         )
     }
 
     fn unpack_strlen(&self) -> usize {
         debug_assert!(self.has_strlen());
-        let val = unsafe { self.val };
-        (val >> Self::LEN_OFFSET) as usize
+        (self.read_val() >> Self::LEN_OFFSET) as usize
     }
 }
 
@@ -370,7 +365,6 @@ impl<'a> NodeInDom<'a> {
             Meta::RAWNUM_NODE => ValueRefInner::RawNum(self.unpack_str()),
             Meta::ARR_NODE => ValueRefInner::Array(self.unpack_value_slice()),
             Meta::OBJ_NODE => ValueRefInner::Object(self.unpack_pair_slice()),
-            Meta::ESC_RAW_NODE => ValueRefInner::RawStr(self.unpack_raw_str()),
             _ => unreachable!("unknown type {typ} in dom"),
         }
     }
@@ -395,16 +389,6 @@ impl<'a> NodeInDom<'a> {
         let pairs = unsafe { self.node.data.obj_pairs.as_ptr() };
         unsafe { from_raw_parts(pairs, len) }
     }
-
-    #[inline(always)]
-    fn unpack_raw_str(&self) -> UnpackedRawStr<'a> {
-        let rawstr = self.node.meta.unpack_rawstr_node();
-        let sp = unsafe { self.node.data.dom_str.as_ptr() };
-        UnpackedRawStr {
-            raw: rawstr.as_raw(),
-            str: rawstr.as_str(sp),
-        }
-    }
 }
 
 impl<'a> From<NodeInDom<'a>> for Value {
@@ -426,8 +410,11 @@ enum ValueDetail<'a> {
     StaticStr(&'static str),
     FastStr(&'a FastStr),
     RawNumFasStr(&'a FastStr),
-    Array(&'a Vec<Value>),
-    Object(&'a Vec<Pair>),
+    Array(&'a Arc<Vec<Value>>),
+    #[cfg(not(feature = "sort_keys"))]
+    Object(&'a Arc<AHashMap<FastStr, Value>>),
+    #[cfg(feature = "sort_keys")]
+    Object(&'a Arc<BTreeMap<FastStr, Value>>),
     Root(NodeInDom<'a>),
     NodeInDom(NodeInDom<'a>),
     EmptyArray,
@@ -470,21 +457,34 @@ pub enum ValueRefInner<'a> {
     Bool(bool),
     Number(Number),
     Str(&'a str),
-    RawStr(UnpackedRawStr<'a>),
     RawNum(&'a str),
     Array(&'a [Value]),
     Object(&'a [Pair]),
+    #[cfg(not(feature = "sort_keys"))]
+    ObjectOwned(&'a Arc<AHashMap<FastStr, Value>>),
+    #[cfg(feature = "sort_keys")]
+    ObjectOwned(&'a Arc<BTreeMap<FastStr, Value>>),
     EmptyArray,
     EmptyObject,
 }
 
 impl<'a> From<&'a [Pair]> for Value {
     fn from(value: &'a [Pair]) -> Self {
-        let newd = value.to_vec();
+        #[cfg(not(feature = "sort_keys"))]
+        let mut newd = AHashMap::with_capacity(value.len());
+        #[cfg(feature = "sort_keys")]
+        let mut newd = BTreeMap::new();
+
+        for (k, v) in value {
+            if let Some(k) = k.as_str() {
+                newd.insert(FastStr::new(k), v.clone());
+            }
+        }
+
         Self {
             meta: Meta::new(Meta::OBJ_MUT),
             data: Data {
-                obj_own: ManuallyDrop::new(Box::new(newd)),
+                obj_own: ManuallyDrop::new(Arc::new(newd)),
             },
         }
     }
@@ -495,18 +495,18 @@ impl Drop for Value {
         if self.meta.get_kind() == Meta::STAIC_NODE || self.meta.in_shared() {
             return;
         }
-
-        unsafe {
-            match self.meta.get_type() {
-                Meta::FASTSTR | Meta::RAWNUM_FASTSTR => ManuallyDrop::drop(&mut self.data.str_own),
-                Meta::ARR_MUT => ManuallyDrop::drop(&mut self.data.arr_own),
-                Meta::OBJ_MUT => ManuallyDrop::drop(&mut self.data.obj_own),
-                Meta::ROOT_NODE => {
-                    let dom = self.meta.unpack_root();
-                    drop(Arc::from_raw(dom));
-                }
-                _ => unreachable!("should not be dropped"),
+        // Safety: each arm accesses the Data union field matching the Meta type tag
+        match self.meta.get_type() {
+            Meta::FASTSTR | Meta::RAWNUM_FASTSTR => unsafe {
+                ManuallyDrop::drop(&mut self.data.str_own)
+            },
+            Meta::ARR_MUT => unsafe { ManuallyDrop::drop(&mut self.data.arr_own) },
+            Meta::OBJ_MUT => unsafe { ManuallyDrop::drop(&mut self.data.obj_own) },
+            Meta::ROOT_NODE => {
+                let dom = self.meta.unpack_root();
+                drop(unsafe { Arc::from_raw(dom) });
             }
+            _ => unreachable!("should not be dropped"),
         }
     }
 }
@@ -518,18 +518,17 @@ pub(crate) enum ValueMut<'a> {
     Str,
     RawNum,
     Array(&'a mut Vec<Value>),
-    Object(&'a mut Vec<Pair>),
+    #[cfg(not(feature = "sort_keys"))]
+    Object(&'a mut AHashMap<FastStr, Value>),
+    #[cfg(feature = "sort_keys")]
+    Object(&'a mut BTreeMap<FastStr, Value>),
 }
 
 impl Value {
     fn is_node_kind(&self) -> bool {
         matches!(
             self.meta.get_kind(),
-            Meta::ARR_NODE
-                | Meta::OBJ_NODE
-                | Meta::STR_NODE
-                | Meta::RAWNUM_NODE
-                | Meta::ESC_RAW_NODE
+            Meta::ARR_NODE | Meta::OBJ_NODE | Meta::STR_NODE | Meta::RAWNUM_NODE
         )
     }
 
@@ -539,10 +538,10 @@ impl Value {
             Meta::NULL => ValueMut::Null,
             Meta::TRUE | Meta::FALSE => ValueMut::Bool,
             Meta::F64 | Meta::I64 | Meta::U64 => ValueMut::Number,
-            Meta::STATIC_STR | Meta::STR_NODE | Meta::FASTSTR | Meta::ESC_RAW_NODE => ValueMut::Str,
+            Meta::STATIC_STR | Meta::STR_NODE | Meta::FASTSTR => ValueMut::Str,
             Meta::RAWNUM_FASTSTR | Meta::RAWNUM_NODE => ValueMut::RawNum,
-            Meta::ARR_MUT => ValueMut::Array(unsafe { &mut self.data.arr_own }),
-            Meta::OBJ_MUT => ValueMut::Object(unsafe { &mut self.data.obj_own }),
+            Meta::ARR_MUT => ValueMut::Array(unsafe { Arc::make_mut(&mut self.data.arr_own) }),
+            Meta::OBJ_MUT => ValueMut::Object(unsafe { Arc::make_mut(&mut self.data.obj_own) }),
             Meta::ROOT_NODE | Meta::EMPTY_ARR | Meta::EMPTY_OBJ => {
                 /* convert to mutable */
                 self.to_mut();
@@ -582,19 +581,26 @@ impl Value {
     }
 
     fn forward_find_shared(current: *const Value, idx: usize) -> *const Shared {
-        unsafe { (*(current.sub(idx) as *const MetaNode)).shared }
+        // Navigate back from a child Value to the MetaNode at the start of the
+        // bump allocation. This requires exposed provenance because `current`
+        // typically has narrow provenance (from &Value indexing), but we need to
+        // access memory outside that provenance range (the MetaNode before it).
+        // The bump allocation's provenance was exposed in visit_root/visit_container_end.
+        let meta_addr = current.expose_provenance() - idx * size_of::<Value>();
+        let meta = std::ptr::with_exposed_provenance::<MetaNode>(meta_addr);
+        assert!(unsafe { (*meta).canary() });
+        unsafe { (*meta).shared }
     }
 
     fn unpack_shared(&self) -> &Shared {
         assert!(self.is_node_kind());
         unsafe {
-            let idx = if self.meta.get_type() == Meta::ESC_RAW_NODE {
-                self.meta.unpack_rawstr_node().get_idx()
-            } else {
-                self.meta.unpack_dom_node().idx
-            } as usize;
+            let idx = self.meta.unpack_dom_node().idx;
             let cur = self as *const _;
-            let shared: *const Shared = Self::forward_find_shared(cur, idx);
+            let shared: *const Shared = Self::forward_find_shared(cur, idx as usize);
+            // The shared pointer stored in MetaNode was written with full
+            // provenance from the Shared allocation, so it can be dereferenced
+            // directly.
             &*shared
         }
     }
@@ -609,7 +615,10 @@ impl Value {
             ValueDetail::FastStr(s) => ValueRefInner::Str(s.as_str()),
             ValueDetail::RawNumFasStr(s) => ValueRefInner::RawNum(s.as_str()),
             ValueDetail::Array(a) => ValueRefInner::Array(a),
-            ValueDetail::Object(o) => ValueRefInner::Object(o),
+            #[cfg(not(feature = "sort_keys"))]
+            ValueDetail::Object(o) => ValueRefInner::ObjectOwned(o),
+            #[cfg(feature = "sort_keys")]
+            ValueDetail::Object(o) => ValueRefInner::ObjectOwned(o),
             ValueDetail::Root(n) | ValueDetail::NodeInDom(n) => n.get_inner(),
             ValueDetail::EmptyArray => ValueRefInner::EmptyArray,
             ValueDetail::EmptyObject => ValueRefInner::EmptyObject,
@@ -618,35 +627,32 @@ impl Value {
 
     #[inline(always)]
     fn unpack_ref(&self) -> ValueDetail<'_> {
-        unsafe {
-            match self.meta.get_type() {
-                Meta::NULL => ValueDetail::Null,
-                Meta::TRUE => ValueDetail::Bool(true),
-                Meta::FALSE => ValueDetail::Bool(false),
-                Meta::STATIC_STR => ValueDetail::StaticStr(self.unpack_static_str()),
-                Meta::I64 => ValueDetail::Number(Number::from(self.data.ival)),
-                Meta::U64 => ValueDetail::Number(Number::from(self.data.uval)),
-                Meta::F64 => ValueDetail::Number(Number::try_from(self.data.fval).unwrap()),
-                Meta::EMPTY_ARR => ValueDetail::EmptyArray,
-                Meta::EMPTY_OBJ => ValueDetail::EmptyObject,
-                Meta::STR_NODE
-                | Meta::RAWNUM_NODE
-                | Meta::ARR_NODE
-                | Meta::OBJ_NODE
-                | Meta::ESC_RAW_NODE => ValueDetail::NodeInDom(NodeInDom {
+        // Safety: each arm accesses the Data union field matching the Meta type tag
+        match self.meta.get_type() {
+            Meta::NULL => ValueDetail::Null,
+            Meta::TRUE => ValueDetail::Bool(true),
+            Meta::FALSE => ValueDetail::Bool(false),
+            Meta::STATIC_STR => ValueDetail::StaticStr(self.unpack_static_str()),
+            Meta::I64 => ValueDetail::Number(Number::from(unsafe { self.data.ival })),
+            Meta::U64 => ValueDetail::Number(Number::from(unsafe { self.data.uval })),
+            Meta::F64 => ValueDetail::Number(Number::try_from(unsafe { self.data.fval }).unwrap()),
+            Meta::EMPTY_ARR => ValueDetail::EmptyArray,
+            Meta::EMPTY_OBJ => ValueDetail::EmptyObject,
+            Meta::STR_NODE | Meta::RAWNUM_NODE | Meta::ARR_NODE | Meta::OBJ_NODE => {
+                ValueDetail::NodeInDom(NodeInDom {
                     node: self,
                     dom: self.unpack_shared(),
-                }),
-                Meta::FASTSTR => ValueDetail::FastStr(&self.data.str_own),
-                Meta::RAWNUM_FASTSTR => ValueDetail::RawNumFasStr(&self.data.str_own),
-                Meta::ARR_MUT => ValueDetail::Array(&self.data.arr_own),
-                Meta::OBJ_MUT => ValueDetail::Object(&self.data.obj_own),
-                Meta::ROOT_NODE => ValueDetail::Root(NodeInDom {
-                    node: self.data.root.as_ref(),
-                    dom: &*self.meta.unpack_root(),
-                }),
-                _ => unreachable!("unknown type"),
+                })
             }
+            Meta::FASTSTR => ValueDetail::FastStr(unsafe { &self.data.str_own }),
+            Meta::RAWNUM_FASTSTR => ValueDetail::RawNumFasStr(unsafe { &self.data.str_own }),
+            Meta::ARR_MUT => ValueDetail::Array(unsafe { &self.data.arr_own }),
+            Meta::OBJ_MUT => ValueDetail::Object(unsafe { &self.data.obj_own }),
+            Meta::ROOT_NODE => ValueDetail::Root(NodeInDom {
+                node: unsafe { self.data.root.as_ref() },
+                dom: unsafe { &*self.meta.unpack_root() },
+            }),
+            _ => unreachable!("unknown type"),
         }
     }
 }
@@ -674,10 +680,45 @@ impl Clone for Value {
             ValueDetail::StaticStr(s) => Value::from_static_str(s),
             ValueDetail::FastStr(s) => s.into(),
             ValueDetail::RawNumFasStr(s) => Value::new_rawnum_faststr(s),
-            ValueDetail::Array(a) => a.as_slice().into(),
-            ValueDetail::Object(o) => o.as_slice().into(),
+            ValueDetail::Array(a) => a.clone().into(),
+            ValueDetail::Object(o) => o.clone().into(),
             ValueDetail::EmptyArray => Value::new_array(),
             ValueDetail::EmptyObject => Value::new_object(),
+        }
+    }
+}
+
+impl From<Arc<Vec<Value>>> for Value {
+    fn from(value: Arc<Vec<Value>>) -> Self {
+        Self {
+            meta: Meta::new(Meta::ARR_MUT),
+            data: Data {
+                arr_own: ManuallyDrop::new(value),
+            },
+        }
+    }
+}
+
+#[cfg(not(feature = "sort_keys"))]
+impl From<Arc<AHashMap<FastStr, Value>>> for Value {
+    fn from(value: Arc<AHashMap<FastStr, Value>>) -> Self {
+        Self {
+            meta: Meta::new(Meta::OBJ_MUT),
+            data: Data {
+                obj_own: ManuallyDrop::new(value),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "sort_keys")]
+impl From<Arc<BTreeMap<FastStr, Value>>> for Value {
+    fn from(value: Arc<BTreeMap<FastStr, Value>>) -> Self {
+        Self {
+            meta: Meta::new(Meta::OBJ_MUT),
+            data: Data {
+                obj_own: ManuallyDrop::new(value),
+            },
         }
     }
 }
@@ -725,11 +766,11 @@ impl Display for Value {
 
 impl Debug for Data {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        unsafe {
-            match self.parent {
-                0 => write!(f, "parent: null"),
-                _ => write!(f, "parent: {}", self.parent),
-            }
+        // Safety: reading `parent` (u64) from the union is valid for any bit pattern
+        let parent = unsafe { self.parent };
+        match parent {
+            0 => write!(f, "parent: null"),
+            _ => write!(f, "parent: {parent}"),
         }
     }
 }
@@ -746,9 +787,9 @@ impl super::value_trait::JsonValueTrait for Value {
             ValueRefInner::Null => JsonType::Null,
             ValueRefInner::Bool(_) => JsonType::Boolean,
             ValueRefInner::Number(_) => JsonType::Number,
-            ValueRefInner::Str(_) | ValueRefInner::RawStr(_) => JsonType::String,
+            ValueRefInner::Str(_) => JsonType::String,
             ValueRefInner::Array(_) => JsonType::Array,
-            ValueRefInner::Object(_) => JsonType::Object,
+            ValueRefInner::Object(_) | ValueRefInner::ObjectOwned(_) => JsonType::Object,
             ValueRefInner::RawNum(_) => JsonType::Number,
             ValueRefInner::EmptyArray => JsonType::Array,
             ValueRefInner::EmptyObject => JsonType::Object,
@@ -804,7 +845,6 @@ impl super::value_trait::JsonValueTrait for Value {
     fn as_str(&self) -> Option<&str> {
         match self.as_ref2() {
             ValueRefInner::Str(s) => Some(s),
-            ValueRefInner::RawStr(raw) => Some(raw.str),
             _ => None,
         }
     }
@@ -935,15 +975,13 @@ impl Value {
             ValueRefInner::Null => ValueRef::Null,
             ValueRefInner::Bool(b) => ValueRef::Bool(b),
             ValueRefInner::Number(n) => ValueRef::Number(n),
-            ValueRefInner::Str(s) | ValueRefInner::RawStr(UnpackedRawStr { raw: _, str: s }) => {
-                ValueRef::String(s)
-            }
+            ValueRefInner::Str(s) => ValueRef::String(s),
             ValueRefInner::Array(_) | ValueRefInner::EmptyArray => {
                 ValueRef::Array(self.as_array().unwrap())
             }
-            ValueRefInner::Object(_) | ValueRefInner::EmptyObject => {
-                ValueRef::Object(self.as_object().unwrap())
-            }
+            ValueRefInner::Object(_)
+            | ValueRefInner::EmptyObject
+            | ValueRefInner::ObjectOwned(_) => ValueRef::Object(self.as_object().unwrap()),
             ValueRefInner::RawNum(raw) => {
                 crate::from_str(raw).map_or(ValueRef::Null, ValueRef::Number)
             }
@@ -982,7 +1020,8 @@ impl Value {
         Value {
             meta: Meta::pack_static_str(Meta::STATIC_STR, val.len()),
             data: Data {
-                static_str: unsafe { NonNull::from(&*val.as_ptr()) },
+                static_str: NonNull::new(val.as_ptr() as *mut u8)
+                    .expect("str::as_ptr() is non-null"),
             },
         }
     }
@@ -1007,7 +1046,8 @@ impl Value {
 
     #[doc(hidden)]
     #[inline]
-    pub(crate) unsafe fn new_f64_unchecked(fval: f64) -> Self {
+    pub(crate) fn new_f64_unchecked(fval: f64) -> Self {
+        debug_assert!(fval.is_finite(), "f64 must be finite");
         Value {
             meta: Meta::new(Meta::F64),
             data: Data { fval },
@@ -1057,7 +1097,7 @@ impl Value {
     #[doc(hidden)]
     #[inline]
     pub fn new_array_with(capacity: usize) -> Self {
-        let arr_own = ManuallyDrop::new(Box::new(Vec::<Value>::with_capacity(capacity)));
+        let arr_own = ManuallyDrop::new(Arc::new(Vec::<Value>::with_capacity(capacity)));
         Value {
             meta: Meta::new(Meta::ARR_MUT),
             data: Data { arr_own },
@@ -1081,17 +1121,7 @@ impl Value {
         Value {
             meta: Meta::pack_dom_node(kind, node_idx, val.len() as u32),
             data: Data {
-                dom_str: unsafe { NonNull::new_unchecked(val.as_ptr() as *mut _) },
-            },
-        }
-    }
-
-    #[inline]
-    pub(crate) fn pack_raw_str(val: &str, raw: RawStr) -> Self {
-        Value {
-            meta: Meta::pack_rawstr(raw),
-            data: Data {
-                dom_str: unsafe { NonNull::new_unchecked(val.as_ptr() as *mut _) },
+                dom_str: NonNull::new(val.as_ptr() as *mut _).expect("str::as_ptr() is non-null"),
             },
         }
     }
@@ -1131,11 +1161,12 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_pair_slice(&self) -> Option<&[Pair]> {
+    pub(crate) fn as_obj_len(&self) -> usize {
         match self.as_ref2() {
-            ValueRefInner::Object(s) => Some(s),
-            ValueRefInner::EmptyObject => Some(&[]),
-            _ => None,
+            ValueRefInner::Object(s) => s.len(),
+            ValueRefInner::EmptyObject => 0,
+            ValueRefInner::ObjectOwned(s) => s.len(),
+            _ => unreachable!("value is not object"),
         }
     }
 
@@ -1158,7 +1189,7 @@ impl Value {
         Value {
             meta: Meta::pack_dom_node(kind, node_idx, str.len() as u32),
             data: Data {
-                dom_str: unsafe { NonNull::new_unchecked(str.as_ptr() as *mut _) },
+                dom_str: NonNull::new(str.as_ptr() as *mut _).expect("str::as_ptr() is non-null"),
             },
         }
     }
@@ -1174,8 +1205,16 @@ impl Value {
     }
 
     #[doc(hidden)]
-    pub fn new_object_with(capacity: usize) -> Self {
-        let obj_own = ManuallyDrop::new(Box::new(Vec::with_capacity(capacity)));
+    pub fn new_object_with(
+        #[cfg(not(feature = "sort_keys"))] capacity: usize,
+        #[cfg(feature = "sort_keys")] _: usize,
+    ) -> Self {
+        let obj_own = ManuallyDrop::new(Arc::new(
+            #[cfg(not(feature = "sort_keys"))]
+            AHashMap::with_capacity(capacity),
+            #[cfg(feature = "sort_keys")]
+            BTreeMap::new(),
+        ));
         Value {
             meta: Meta::new(Meta::OBJ_MUT),
             data: Data { obj_own },
@@ -1183,7 +1222,7 @@ impl Value {
     }
 
     pub(crate) fn get_index(&self, index: usize) -> Option<&Self> {
-        debug_assert!(self.is_array(), "{:?}", self);
+        debug_assert!(self.is_array(), "{self:?}");
         if let ValueRefInner::Array(s) = self.as_ref2() {
             if index < s.len() {
                 return Some(&s[index]);
@@ -1209,48 +1248,30 @@ impl Value {
 
     pub(crate) fn get_key_value(&self, key: &str) -> Option<(&str, &Self)> {
         debug_assert!(self.is_object());
-        if let ValueRefInner::Object(kv) = self.as_ref2() {
+        let ref_inner = self.as_ref2();
+        if let ValueRefInner::Object(kv) = ref_inner {
             for (k, v) in kv {
                 let k = k.as_str().expect("key is not string");
                 if k == key {
                     return Some((k, v));
                 }
             }
-        }
-        None
-    }
-
-    #[inline]
-    pub(crate) fn get_key_offset(&self, key: &str) -> Option<usize> {
-        debug_assert!(self.is_object());
-        if let ValueRefInner::Object(kv) = self.as_ref2() {
-            for (i, pair) in kv.iter().enumerate() {
-                debug_assert!(pair.0.is_str());
-                if pair.0.equal_str(key) {
-                    return Some(i);
-                }
+        } else if let ValueRefInner::ObjectOwned(kv) = ref_inner {
+            if let Some((k, v)) = kv.get_key_value(key) {
+                return Some((k.as_str(), v));
             }
         }
         None
     }
 
     #[inline]
-    pub(crate) fn get_key_mut(&mut self, key: &str) -> Option<(&mut Self, usize)> {
+    pub(crate) fn get_key_mut(&mut self, key: &str) -> Option<&mut Self> {
         if let ValueMut::Object(kv) = self.as_mut() {
-            for (i, (k, v)) in kv.iter_mut().enumerate() {
-                debug_assert!(k.is_str());
-                if k.equal_str(key) {
-                    return Some((v, i));
-                }
+            if let Some(v) = kv.get_mut(key) {
+                return Some(v);
             }
         }
         None
-    }
-
-    #[inline]
-    fn equal_str(&self, val: &str) -> bool {
-        debug_assert!(self.is_str());
-        self.as_str().expect("value is not string") == val
     }
 
     #[inline]
@@ -1258,7 +1279,10 @@ impl Value {
         debug_assert!(self.is_object() || self.is_array());
         match self.unpack_ref() {
             ValueDetail::Array(arr) => arr.capacity(),
+            #[cfg(not(feature = "sort_keys"))]
             ValueDetail::Object(obj) => obj.capacity(),
+            #[cfg(feature = "sort_keys")]
+            ValueDetail::Object(obj) => obj.len(),
             ValueDetail::NodeInDom(indom) | ValueDetail::Root(indom) => {
                 if self.is_object() {
                     indom.unpack_pair_slice().len()
@@ -1291,22 +1315,11 @@ impl Value {
     }
 
     #[inline]
-    pub(crate) fn remove_pair_index(&mut self, index: usize) -> (Value, Value) {
-        debug_assert!(self.is_object());
-        match self.as_mut() {
-            ValueMut::Object(obj) => obj.remove(index),
-            _ => unreachable!("value is not object"),
-        }
-    }
-
-    #[inline]
     pub(crate) fn remove_key(&mut self, k: &str) -> Option<Value> {
         debug_assert!(self.is_object());
-        if let Some(i) = self.get_key_offset(k) {
-            let (_, val) = self.remove_pair_index(i);
-            Some(val)
-        } else {
-            None
+        match self.as_mut() {
+            ValueMut::Object(obj) => obj.remove(k),
+            _ => unreachable!("value is not object"),
         }
     }
 
@@ -1337,7 +1350,10 @@ impl Value {
         debug_assert!(size_of::<T>() == size_of::<Value>() || size_of::<T>() == size_of::<Pair>());
         match self.as_mut() {
             ValueMut::Array(arr) => arr.reserve(additional),
+            #[cfg(not(feature = "sort_keys"))]
             ValueMut::Object(obj) => obj.reserve(additional),
+            #[cfg(feature = "sort_keys")]
+            ValueMut::Object(_) => {}
             _ => unreachable!("value is not array or object"),
         }
     }
@@ -1358,13 +1374,12 @@ impl Value {
 
     #[doc(hidden)]
     #[inline]
-    pub fn append_pair(&mut self, pair: Pair) -> &mut Pair {
+    pub fn insert(&mut self, key: &str, val: Value) -> &mut Value {
         debug_assert!(self.is_object());
         match self.as_mut() {
             ValueMut::Object(obj) => {
-                obj.push(pair);
-                let len = obj.len();
-                &mut obj[len - 1]
+                obj.insert(FastStr::new(key), val);
+                obj.get_mut(key).unwrap()
             }
             _ => unreachable!("value is not object"),
         }
@@ -1379,29 +1394,24 @@ impl Value {
         }
     }
 
-    #[inline]
-    pub(crate) fn pop_pair(&mut self) -> Option<Pair> {
-        debug_assert!(self.is_object());
-        match self.as_mut() {
-            ValueMut::Object(obj) => obj.pop(),
-            _ => unreachable!("value is not object"),
-        }
-    }
-
     #[inline(never)]
     pub(crate) fn parse_with_padding(&mut self, json: &[u8], cfg: DeserializeCfg) -> Result<usize> {
         // allocate the padding buffer for the input json
         let mut shared = Arc::new(Shared::default());
+        // Expose Arc allocation provenance (header + data) so that
+        // Arc::increment_strong_count in pack_shared can recover it
+        // via with_exposed_provenance.
+        Arc::as_ptr(&shared).expose_provenance();
         let mut buffer = Vec::with_capacity(json.len() + Self::PADDING_SIZE);
         buffer.extend_from_slice(json);
         buffer.extend_from_slice(&b"x\"x"[..]);
         buffer.extend_from_slice(&[0; 61]);
 
         let smut = Arc::get_mut(&mut shared).unwrap();
-        let slice = PaddedSliceRead::new(buffer.as_mut_slice());
+        let slice = PaddedSliceRead::new(buffer.as_mut_slice(), json);
         let mut parser = Parser::new(slice).with_config(cfg);
         let mut vis = DocumentVisitor::new(json.len(), smut);
-        parser.parse_dom(&mut vis)?;
+        parser.parse_dom(&mut vis, None)?;
         let idx = parser.read.index();
 
         // NOTE: root node should is the first node
@@ -1419,26 +1429,23 @@ impl Value {
     ) -> Result<()> {
         let remain_len = parser.read.remain();
         let mut vis = DocumentVisitor::new(remain_len, shared);
-        parser.parse_dom2(&mut vis, strbuf)?;
+        parser.parse_dom(&mut vis, Some(strbuf))?;
         *self = unsafe { vis.root.as_ref().clone() };
         Ok(())
-    }
-
-    pub(crate) fn as_raw_str(&self) -> Option<UnpackedRawStr> {
-        match self.as_ref2() {
-            ValueRefInner::RawStr(raw) => Some(raw),
-            _ => None,
-        }
     }
 }
 
 // a simple wrapper for visitor
 pub(crate) struct DocumentVisitor<'a> {
-    pub(crate) shared: &'a mut Shared,
+    // Store as raw pointer to avoid Stacked Borrows invalidation:
+    // storing `&'a mut Shared` and later creating `*const Shared` from it
+    // produces a tag that gets invalidated by subsequent mutable accesses.
+    pub(crate) shared: *mut Shared,
     pub(crate) buf: TlsBuf,
     pub(crate) parent: usize,
     pub(crate) nodes_start: usize,
     pub(crate) root: NonNull<Value>,
+    _marker: std::marker::PhantomData<&'a mut Shared>,
 }
 
 impl<'a> DocumentVisitor<'a> {
@@ -1449,17 +1456,22 @@ impl<'a> DocumentVisitor<'a> {
         // if the capacity is not enough, we will return a error.
         let max_len = (json_len / 2) + 2;
         let buf = TlsBuf::with_capacity(max_len);
+        let shared = shared as *mut Shared;
+        // Expose provenance so that forward_find_shared / unpack_shared can
+        // recover the Shared pointer via with_exposed_provenance.
+        (shared as *const Shared).expose_provenance();
         DocumentVisitor {
             shared,
             buf,
             parent: 0,
             nodes_start: 0,
             root: NonNull::dangling(),
+            _marker: std::marker::PhantomData,
         }
     }
 
     fn nodes(&mut self) -> &mut Vec<ManuallyDrop<Value>> {
-        unsafe { NonNull::new_unchecked(self.buf.as_vec_mut() as *mut _).as_mut() }
+        self.buf.as_vec_mut()
     }
 
     fn index(&mut self) -> usize {
@@ -1470,19 +1482,27 @@ impl<'a> DocumentVisitor<'a> {
 #[repr(C)]
 struct MetaNode {
     shared: *const Shared,
-    canary: usize,
+    canary: u64,
 }
+
+const _: () = assert!(
+    std::mem::size_of::<MetaNode>() == std::mem::size_of::<Value>(),
+    "MetaNode and Value must have the same size for transmute safety"
+);
 
 impl MetaNode {
     fn new(shared: *const Shared) -> Self {
         let canary = b"SONICRS\0";
         MetaNode {
             shared,
-            canary: unsafe { transmute::<&[u8; 8], usize>(canary) },
+            canary: u64::from_ne_bytes(*canary),
         }
     }
+
+    fn canary(&self) -> bool {
+        self.canary == u64::from_ne_bytes(*b"SONICRS\0")
+    }
 }
-// TODO: add assert for Value
 
 impl<'a> DocumentVisitor<'a> {
     fn visit_container_start(&mut self, kind: u64) -> bool {
@@ -1519,7 +1539,11 @@ impl<'a> DocumentVisitor<'a> {
             let real_count = visited_children.len() + Value::HEAD_NODE_COUNT;
             let layout = Layout::array::<Value>(real_count).unwrap();
             let hdr =
-                vis.shared.get_alloc().alloc_layout(layout).as_ptr() as *mut ManuallyDrop<Value>;
+                (*vis.shared).get_alloc().alloc_layout(layout).as_ptr() as *mut ManuallyDrop<Value>;
+
+            // Expose provenance so forward_find_shared can navigate back via
+            // with_exposed_provenance
+            (hdr as *const ManuallyDrop<Value>).expose_provenance();
 
             // copy visited nodes into document
             let visited_children = &vis.nodes()[(parent + 1)..];
@@ -1530,6 +1554,7 @@ impl<'a> DocumentVisitor<'a> {
             // record the `Shared` pointer
             let meta = &mut *(hdr as *mut MetaNode);
             meta.shared = vis.shared as *const _;
+            meta.canary = u64::from_ne_bytes(*b"SONICRS\0");
 
             // update the container header
             let idx = (parent - vis.parent) as u32;
@@ -1545,17 +1570,20 @@ impl<'a> DocumentVisitor<'a> {
     fn visit_root(&mut self) {
         // should alloc root node in the bump allocator
         let start = self.nodes_start;
-        let (rm, ru) = unsafe { (self.nodes()[start].meta, self.nodes()[start].data.uval) };
-        let ptr = self.shared as *const _;
-        let (_, root) = self
-            .shared
-            .get_alloc()
-            .alloc((MetaNode::new(ptr), Value::default()));
+        let ptr = self.shared as *const Shared;
+        let tuple_ref =
+            unsafe { (*self.shared).get_alloc() }.alloc((MetaNode::new(ptr), Value::default()));
 
-        // copy visited nodes into document
-        root.meta = rm;
-        root.data.uval = ru;
-        self.root = NonNull::from(root);
+        // Expose provenance of the full (MetaNode, Value) allocation so that
+        // forward_find_shared can navigate back to MetaNode via with_exposed_provenance.
+        (tuple_ref as *const (MetaNode, Value)).expose_provenance();
+
+        // Copy source node to root using ptr::copy to preserve pointer provenance
+        // in the Data union. Copying through data.uval (u64) would strip provenance.
+        let src = &self.nodes()[start] as *const ManuallyDrop<Value> as *const Value;
+        let dst = &mut tuple_ref.1 as *mut Value;
+        unsafe { std::ptr::copy_nonoverlapping(src, dst, 1) };
+        self.root = unsafe { NonNull::new_unchecked(dst) };
     }
 
     #[inline(always)]
@@ -1584,7 +1612,7 @@ impl<'a> DocumentVisitor<'a> {
 impl<'de, 'a> JsonVisitor<'de> for DocumentVisitor<'a> {
     #[inline(always)]
     fn visit_dom_start(&mut self) -> bool {
-        let shared = self.shared as *mut _ as *const _;
+        let shared = self.shared as *const Shared;
         self.push_meta(MetaNode::new(shared));
         self.nodes_start = self.nodes().len();
         assert_eq!(self.nodes().len(), 1);
@@ -1598,16 +1626,14 @@ impl<'de, 'a> JsonVisitor<'de> for DocumentVisitor<'a> {
 
     #[inline(always)]
     fn visit_f64(&mut self, val: f64) -> bool {
-        // # Safety
-        // we have checked the f64 in parsing number.
-        let node = unsafe { Value::new_f64_unchecked(val) };
+        let node = Value::new_f64_unchecked(val);
         self.push_node(node)
     }
 
     #[inline(always)]
     fn visit_raw_number(&mut self, val: &str) -> bool {
         let idx = self.index();
-        let node = Value::copy_str_in(Meta::RAWNUM_NODE, val, idx, self.shared);
+        let node = Value::copy_str_in(Meta::RAWNUM_NODE, val, idx, unsafe { &mut *self.shared });
         self.push_node(node)
     }
 
@@ -1656,7 +1682,7 @@ impl<'de, 'a> JsonVisitor<'de> for DocumentVisitor<'a> {
     #[inline(always)]
     fn visit_str(&mut self, val: &str) -> bool {
         let idx = self.index();
-        let node = Value::copy_str_in(Meta::STR_NODE, val, idx, self.shared);
+        let node = Value::copy_str_in(Meta::STR_NODE, val, idx, unsafe { &mut *self.shared });
         self.push_node(node)
     }
 
@@ -1676,40 +1702,9 @@ impl<'de, 'a> JsonVisitor<'de> for DocumentVisitor<'a> {
         self.visit_borrowed_str(key)
     }
 
-    fn visit_raw_str(&mut self, val: &str, mut raw: RawStr) -> bool {
-        unsafe {
-            raw.set_index(self.index());
-            raw.set_str_len(val.len());
-        }
-        let node = Value::pack_raw_str(val, raw);
-        self.push_node(node)
-    }
-
     fn visit_dom_end(&mut self) -> bool {
         self.visit_root();
         true
-    }
-
-    fn allocator(&mut self) -> Option<&mut Bump> {
-        Some(self.shared.get_alloc())
-    }
-}
-
-impl Value {
-    pub(crate) const RAW_TOKEN: &str = "_private:sonic_rs:raw";
-}
-
-#[derive(Debug)]
-struct RawKey<'a>(&'a str);
-
-impl Serialize for RawKey<'_> {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut s = serializer.serialize_struct(Value::RAW_TOKEN, 1)?;
-        s.serialize_field(Value::RAW_TOKEN, &self.0)?;
-        s.end()
     }
 }
 
@@ -1723,14 +1718,6 @@ impl Serialize for Value {
             ValueRefInner::Null => serializer.serialize_unit(),
             ValueRefInner::Bool(b) => serializer.serialize_bool(b),
             ValueRefInner::Number(n) => n.serialize(serializer),
-            ValueRefInner::RawStr(UnpackedRawStr { raw, str: _ }) => {
-                use serde::ser::SerializeStruct;
-
-                use crate::serde::rawnumber::TOKEN;
-                let mut struct_ = tri!(serializer.serialize_struct(TOKEN, 1));
-                tri!(struct_.serialize_field(TOKEN, raw));
-                struct_.end()
-            }
             ValueRefInner::Str(s) => s.serialize(serializer),
             ValueRefInner::Array(a) => {
                 let mut seq = tri!(serializer.serialize_seq(Some(a.len())));
@@ -1749,11 +1736,7 @@ impl Serialize for Value {
                     kvs.sort_by(|(k1, _), (k2, _)| k1.as_str().unwrap().cmp(k2.as_str().unwrap()));
                     let mut map = tri!(serializer.serialize_map(Some(kvs.len())));
                     for (k, v) in kvs {
-                        if let Some(raw) = k.as_raw_str() {
-                            tri!(map.serialize_key(&RawKey(raw.raw)));
-                        } else {
-                            tri!(map.serialize_key(k.as_str().unwrap()));
-                        }
+                        tri!(map.serialize_key(k.as_str().unwrap()));
                         tri!(map.serialize_value(v));
                     }
                     map.end()
@@ -1763,15 +1746,29 @@ impl Serialize for Value {
                     let entries = o.iter();
                     let mut map = tri!(serializer.serialize_map(Some(entries.len())));
                     for (k, v) in entries {
-                        if let Some(raw) = k.as_raw_str() {
-                            tri!(map.serialize_key(&RawKey(raw.raw)));
-                        } else {
-                            tri!(map.serialize_key(k.as_str().unwrap()));
-                        }
+                        tri!(map.serialize_key(k.as_str().unwrap()));
                         tri!(map.serialize_value(v));
                     }
                     map.end()
                 }
+            }
+            #[cfg(not(feature = "sort_keys"))]
+            ValueRefInner::ObjectOwned(o) => {
+                let mut map = tri!(serializer.serialize_map(Some(o.len())));
+                for (k, v) in o.iter() {
+                    tri!(map.serialize_key(k.as_str()));
+                    tri!(map.serialize_value(v));
+                }
+                map.end()
+            }
+            #[cfg(feature = "sort_keys")]
+            ValueRefInner::ObjectOwned(o) => {
+                let mut map = tri!(serializer.serialize_map(Some(o.len())));
+                for (k, v) in o.iter() {
+                    tri!(map.serialize_key(k.as_str()));
+                    tri!(map.serialize_value(v));
+                }
+                map.end()
             }
             ValueRefInner::RawNum(raw) => {
                 use serde::ser::SerializeStruct;
@@ -1787,9 +1784,9 @@ impl Serialize for Value {
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
-
     use super::*;
+    #[cfg(feature = "sort_keys")]
+    use crate::object;
     use crate::{error::make_error, from_slice, from_str, pointer, util::mock::MockString};
 
     #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
@@ -1805,8 +1802,7 @@ mod test {
             if valin2.val != val {
                 diff_json(data);
                 return Err(make_error(format!(
-                    "invalid result when test parse valid json to ValueInStruct {}",
-                    data
+                    "invalid result when test parse valid json to ValueInStruct {data}"
                 )));
             }
         }
@@ -1827,10 +1823,7 @@ mod test {
                 Ok(())
             } else {
                 diff_json(data);
-                Err(make_error(format!(
-                    "invalid result for valid json {}",
-                    data
-                )))
+                Err(make_error(format!("invalid result for valid json {data}")))
             }
         } else {
             if dom.is_err() {
@@ -1866,9 +1859,10 @@ mod test {
         }
     }
 
-    fn test_value_file(path: &Path) {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_value_file(path: &std::path::Path) {
         let data = std::fs::read_to_string(path).unwrap();
-        assert!(test_value(&data).is_ok(), "failed json is  {:?}", path);
+        assert!(test_value(&data).is_ok(), "failed json is {path:?}");
     }
 
     #[test]
@@ -1897,7 +1891,7 @@ mod test {
                 "zip": "10001"
             }
         }"#;
-        assert!(test_value(data).is_ok(), "failed json is {}", data);
+        assert!(test_value(data).is_ok(), "failed json is {data}");
 
         // // Valid JSON data with escape characters
         // let data = r#"{
@@ -1909,10 +1903,12 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(miri))]
     fn test_node_from_files3() {
         use std::fs::DirEntry;
         let path = env!("CARGO_MANIFEST_DIR").to_string() + "/benchmarks/benches/testdata/";
-        println!("dir is {}", path);
+        println!("dir is {path}");
 
         let mut files: Vec<DirEntry> = std::fs::read_dir(path)
             .unwrap()
@@ -1952,7 +1948,7 @@ mod test {
 
         for data in testdata {
             let ret: Result<Value> = from_slice(data.as_bytes());
-            assert!(ret.is_err(), "failed json is {}", data);
+            assert!(ret.is_err(), "failed json is {data}");
         }
     }
 
@@ -2043,7 +2039,7 @@ mod test {
         let ret: Result<Value> = from_slice(&data);
         assert_eq!(
             ret.err().unwrap().to_string(),
-            "Invalid UTF-8 characters in json at line 1 column 1\n\n\t\"��\"\n\t.^..\n"
+            "Invalid UTF-8 characters in json at line 1 column 2\n\n\t\"��\"\n\t.^..\n"
         );
 
         let dom: Result<Value> = unsafe { from_slice_unchecked(&data) };
@@ -2053,14 +2049,14 @@ mod test {
         let dom: Result<Value> = from_slice(&data);
         assert_eq!(
             dom.err().unwrap().to_string(),
-            "Invalid UTF-8 characters in json at line 1 column 2\n\n\t\"\"�\n\t..^\n"
+            "Invalid UTF-8 characters in json at line 1 column 3\n\n\t\"\"�\n\t..^\n"
         );
 
         let data = [0x80, b'"', b'"'];
         let dom: Result<Value> = unsafe { from_slice_unchecked(&data) };
         assert_eq!(
             dom.err().unwrap().to_string(),
-            "Invalid JSON value at line 1 column 0\n\n\t�\"\"\n\t^..\n"
+            "Invalid JSON value at line 1 column 1\n\n\t�\"\"\n\t^..\n"
         );
     }
 
@@ -2106,6 +2102,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn test_arbitrary_precision() {
         use crate::Deserializer;
 
@@ -2125,24 +2122,6 @@ mod test {
             let value: Value = de.deserialize().unwrap();
             assert_eq!(value.as_raw_number().unwrap().as_str(), num);
             assert_eq!(value.to_string(), num);
-        }
-    }
-
-    #[test]
-    fn test_raw_str() {
-        use crate::{Deserialize, Deserializer};
-        let data = [
-            r#"{"a":1}"#,
-            r#"{"a":1,"b":"\\u0001"}"#,
-            r#"{"a":1,"b":"💎"}"#,
-            r#"{"\\u0001":1,"b":"\\u0001"}"#,
-        ];
-
-        for json in data {
-            let mut de = Deserializer::from_str(json).use_raw();
-            let value: Value = Deserialize::deserialize(&mut de).unwrap();
-            let out = crate::to_string(&value).unwrap();
-            assert_eq!(json, out);
         }
     }
 
@@ -2183,18 +2162,39 @@ mod test {
         }
     }
 
-    #[cfg(feature = "use_raw")]
+    #[cfg(feature = "sort_keys")]
     #[test]
-    fn test_use_raw() {
-        let str = r#"{"music_author":"\ud83d\udc8b"}"#;
-        let mut de = crate::Deserializer::from_json(str).use_raw();
-        let mut root: Value = de.deserialize().unwrap();
-        let ori_obj = root.as_object_mut().unwrap();
-        let mut ret_obj = crate::object! {};
-        for (key, val) in ori_obj.into_iter() {
-            ret_obj.insert(&key, val.take());
+    fn test_sort_keys_owned() {
+        let obj = object! {
+            "b": 2,
+            "bc": object! {
+                "cb": 1,
+                "ca": "hello",
+            },
+            "a": 1,
+        };
+
+        let obj2 = object! {
+            "a": 1,
+            "b": 2,
+            "bc": object! {
+                "ca": "hello",
+                "cb": 1,
+            },
+        };
+
+        assert_eq!(obj, obj2);
+    }
+
+    #[test]
+    fn test_issue_179_line_column() {
+        let json = r#"
+        {
+            "key\nwith\nnewlines": "value",
+            "another_key": [, 1, 2, 3]
         }
-        let result = crate::to_string(&ret_obj).unwrap();
-        assert_eq!(str, &result);
+        "#;
+        let err = crate::from_str::<Value>(json).unwrap_err();
+        assert_eq!(err.line(), 4);
     }
 }

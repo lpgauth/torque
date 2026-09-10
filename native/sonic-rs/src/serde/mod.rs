@@ -7,11 +7,14 @@ pub(crate) mod ser;
 
 pub(crate) use self::de::tri;
 pub use self::{
-    de::{from_slice, from_slice_unchecked, from_str, Deserializer, StreamDeserializer},
+    de::{
+        from_reader, from_slice, from_slice_unchecked, from_str, Deserializer, StreamDeserializer,
+    },
     number::{JsonNumberTrait, Number},
     rawnumber::RawNumber,
     ser::{
-        to_string, to_string_pretty, to_vec, to_vec_pretty, to_writer, to_writer_pretty, Serializer,
+        to_lazyvalue, to_string, to_string_pretty, to_vec, to_vec_pretty, to_writer,
+        to_writer_pretty, Serializer,
     },
 };
 
@@ -27,7 +30,7 @@ mod test {
 
     use bytes::Bytes;
     use faststr::FastStr;
-    use serde::{de::IgnoredAny, Deserialize, Serialize};
+    use serde::{de::IgnoredAny, ser::SerializeMap, Deserialize, Serialize};
 
     use super::*;
     use crate::{Result, Value};
@@ -45,6 +48,84 @@ mod test {
                 m
             }
         };
+    }
+
+    struct UnorderedMap<'a> {
+        entries: &'a [(&'a str, u8)],
+    }
+
+    impl Serialize for UnorderedMap<'_> {
+        fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let mut map = serializer.serialize_map(Some(self.entries.len()))?;
+            for (key, value) in self.entries {
+                map.serialize_entry(key, value)?;
+            }
+            map.end()
+        }
+    }
+
+    #[test]
+    fn test_serializer_sort_map_keys_toggle() {
+        let entries = [("b", 1u8), ("a", 2u8), ("c", 3u8)];
+        let unordered = UnorderedMap { entries: &entries };
+
+        let mut ser = Serializer::new(Vec::new());
+        unordered.serialize(&mut ser).unwrap();
+        let output = String::from_utf8(ser.into_inner()).unwrap();
+        let expected_default = r#"{"b":1,"a":2,"c":3}"#;
+        assert_eq!(output, expected_default);
+
+        let mut ser = Serializer::new(Vec::new()).sort_map_keys();
+        unordered.serialize(&mut ser).unwrap();
+        let output = String::from_utf8(ser.into_inner()).unwrap();
+        assert_eq!(output, r#"{"a":2,"b":1,"c":3}"#);
+    }
+
+    #[test]
+    fn test_value_to_string_sort_behavior() {
+        let value: Value = crate::json!({"b": 1, "a": 2, "c": 3});
+
+        let json = to_string(&value).unwrap();
+        let expected_sorted = r#"{"a":2,"b":1,"c":3}"#;
+
+        if cfg!(feature = "sort_keys") {
+            assert_eq!(json, expected_sorted);
+        } else {
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, serde_json::json!({"b": 1, "a": 2, "c": 3}));
+        }
+
+        let mut ser = Serializer::new(Vec::new()).sort_map_keys();
+        value.serialize(&mut ser).unwrap();
+        let sorted_json = String::from_utf8(ser.into_inner()).unwrap();
+        assert_eq!(sorted_json, expected_sorted);
+    }
+
+    #[test]
+    fn test_value_serializer_sort_map_keys() {
+        let value: Value = crate::json!({"delta": 4, "beta": 2, "alpha": 1});
+
+        let mut ser = Serializer::new(Vec::new());
+        value.serialize(&mut ser).unwrap();
+        let default_json = String::from_utf8(ser.into_inner()).unwrap();
+
+        if cfg!(feature = "sort_keys") {
+            assert_eq!(default_json, r#"{"alpha":1,"beta":2,"delta":4}"#);
+        } else {
+            let parsed: serde_json::Value = serde_json::from_str(&default_json).unwrap();
+            assert_eq!(
+                parsed,
+                serde_json::json!({"delta": 4, "beta": 2, "alpha": 1})
+            );
+        }
+
+        let mut ser = Serializer::new(Vec::new()).sort_map_keys();
+        value.serialize(&mut ser).unwrap();
+        let sorted = String::from_utf8(ser.into_inner()).unwrap();
+        assert_eq!(sorted, r#"{"alpha":1,"beta":2,"delta":4}"#);
     }
 
     #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -223,7 +304,7 @@ mod test {
         let expect = serde_json::to_string(&data).expect("Failed to serialize the data");
         let got = to_string(&data).expect("Failed to serialize the data");
         assert_eq!(expect, got);
-        println!("serialized json is {}", got);
+        println!("serialized json is {got}");
 
         let got = r#"{"ignored":0,"#.to_string() + &got[1..];
         let expect_value: TestData =
@@ -255,6 +336,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(not(miri))]
     fn test_serde_time() {
         use chrono::{DateTime, Utc};
 
@@ -264,6 +346,7 @@ mod test {
         assert_eq!(time, got);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn read_file(path: &str, vec: &mut Vec<u8>) {
         use std::io::Read;
         let root = env!("CARGO_MANIFEST_DIR").to_owned();
@@ -273,7 +356,9 @@ mod test {
             .unwrap();
     }
 
+    #[cfg(not(miri))]
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn test_struct() {
         use schema::{citm_catalog::CitmCatalog, twitter::Twitter};
         let mut vec = Vec::new();
@@ -315,7 +400,7 @@ mod test {
         let expect = r#"{"num":1.23,"raw_num":1.23e123}"#;
         let got = to_string(&data).expect("Failed to serialize the data");
         assert_eq!(expect, got);
-        println!("serialized json is {}", got);
+        println!("serialized json is {got}");
 
         let got_value: TestJsonNumber = from_str(expect).expect("Failed to deserialize the data");
         assert_eq!(data, got_value);
@@ -325,7 +410,7 @@ mod test {
     fn test_json_number_invalid() {
         fn test_json_failed(json: &str) {
             let ret: Result<RawNumber> = from_str(json);
-            assert!(ret.is_err(), "invalid json is {}", json);
+            assert!(ret.is_err(), "invalid json is {json}");
         }
         test_json_failed(r#"0."#);
         test_json_failed(r#"-"#);
@@ -347,20 +432,15 @@ mod test {
         let value: crate::Result<String> = from_slice(&data);
         assert_eq!(
             value.err().unwrap().to_string(),
-            "Invalid UTF-8 characters in json at line 1 column 4\n\n\t\"\0\0\0��\"\n\t....^..\n"
+            "Invalid UTF-8 characters in json at line 1 column 5\n\n\t\"\0\0\0��\"\n\t....^..\n"
         );
-
-        #[derive(Debug, Deserialize, Serialize, PartialEq)]
-        struct TestStruct {
-            char_: char,
-        }
 
         // char's deserialize will iterator on the `str`
         let data = [34, 255, 34];
         let value: crate::Result<char> = from_slice(&data);
         assert_eq!(
             value.err().unwrap().to_string(),
-            "Invalid UTF-8 characters in json at line 1 column 1\n\n\t\"�\"\n\t.^.\n"
+            "Invalid UTF-8 characters in json at line 1 column 2\n\n\t\"�\"\n\t.^.\n"
         );
     }
 
@@ -433,77 +513,6 @@ mod test {
         test_from_slice!(Data, &br#"{"content":[1,2,3,4,5]}"#[..]);
     }
 
-    use std::{
-        fmt::{Formatter, Result as FmtResult},
-        result::Result as StdResult,
-    };
-
-    fn my_deseirlize_seq<'de, D>(deserializer: D) -> StdResult<(i64, i64), D::Error>
-    where
-        D: serde::de::Deserializer<'de>,
-    {
-        struct TupleVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for TupleVisitor {
-            type Value = (i64, i64);
-
-            fn expecting(&self, formatter: &mut Formatter) -> FmtResult {
-                formatter.write_str("expect an array")
-            }
-
-            fn visit_seq<S>(self, mut seq: S) -> StdResult<Self::Value, S::Error>
-            where
-                S: serde::de::SeqAccess<'de>,
-            {
-                let x = seq
-                    .next_element::<i64>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-                let y = seq
-                    .next_element::<i64>()?
-                    .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
-                Ok((x, y))
-            }
-        }
-
-        deserializer.deserialize_seq(TupleVisitor)
-    }
-
-    fn my_deseirlize_map<'de, D>(deserializer: D) -> StdResult<(String, i64), D::Error>
-    where
-        D: serde::de::Deserializer<'de>,
-    {
-        struct MapVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for MapVisitor {
-            type Value = (String, i64);
-
-            fn expecting(&self, formatter: &mut Formatter) -> FmtResult {
-                formatter.write_str("expect an array")
-            }
-
-            fn visit_map<S>(self, mut map: S) -> StdResult<Self::Value, S::Error>
-            where
-                S: serde::de::MapAccess<'de>,
-            {
-                let x = map
-                    .next_key()?
-                    .ok_or_else(|| serde::de::Error::custom("miss a key"))?;
-                let y = map.next_value::<i64>()?;
-                Ok((x, y))
-            }
-        }
-
-        deserializer.deserialize_map(MapVisitor)
-    }
-
-    #[derive(serde::Deserialize, Debug, Eq, PartialEq)]
-    struct MyTuple {
-        #[serde(deserialize_with = "my_deseirlize_seq")]
-        seq: (i64, i64),
-        #[serde(deserialize_with = "my_deseirlize_map")]
-        map: (String, i64),
-    }
-
     #[test]
     fn test_serde_invalid_utf8() {
         let json = r#""王先生""#;
@@ -512,12 +521,12 @@ mod test {
         assert!(!error, "Encoded error");
 
         let obj: &[u8] = from_slice(encoded.as_ref()).expect("Failed deserialize");
-        println!("Deserialized {:?}", obj);
+        println!("Deserialized {obj:?}");
 
         let sout = crate::to_string(&obj).unwrap();
         let jout = serde_json::to_string(&obj).unwrap();
         assert_eq!(jout, sout);
-        println!("json is {}", jout);
+        println!("json is {jout}");
         // this will failed
         // let jv = serde_json::from_str::<&[u8]>(&jout).unwrap();
     }
@@ -535,7 +544,7 @@ mod test {
         map.insert(User::default(), 123);
 
         let got = to_string(&map);
-        println!("{:?}", got);
+        println!("{got:?}");
         assert!(got.is_err());
     }
 
@@ -605,35 +614,35 @@ mod test {
         {   "invalid utf8 here": "invalid utf8 here",
             "bytes": [1,2,3],
             "string": "hello",
-        
+
             "true": true,
-    
+
             "1": 1,
             "123": 123,
             "-123": -123,
             "12345": 12345,
             "1": 1,
-    
+
             "1": 1,
             "123": 123,
             "123": -123,
             "12345": 12345,
             "1": 1,
-    
+
             "12345": 12345,
             "1": 1,
-    
+
             "1.23e+2": 1.23,
             "-1.23": -1.23,
-    
+
             "123": "option",
-    
+
             "wrapper": {},
-    
+
             "Zero": "enum",
-    
+
             "A": "char",
-    
+
             "ignored": "ignored"
         }
         "#
@@ -729,8 +738,63 @@ mod test {
         for d in data {
             let mut de = Deserializer::from_slice(d);
             let err: crate::Error = de.deserialize::<String>().expect_err("should error");
-            eprintln!("{}", err);
+            eprintln!("{err}");
             assert!(err.is_syntax());
         }
+    }
+
+    #[test]
+    fn test_utf8_lossy_surrogate_backtrack() {
+        // high surrogate + non-\u content → FFFD + literal chars
+        let input = br#""\uD800abc""#;
+        let mut de = Deserializer::from_slice(input).utf8_lossy();
+        let value: String = de.deserialize().unwrap();
+        assert_eq!(value, "\u{FFFD}abc");
+
+        // high + invalid-low (another high) + valid-low → FFFD + emoji
+        let input = br#""\uDA51\uD83D\uDE04""#;
+        let mut de = Deserializer::from_slice(input).utf8_lossy();
+        let value: String = de.deserialize().unwrap();
+        assert_eq!(value, "\u{FFFD}\u{1F604}");
+
+        // high + non-surrogate \uXXXX → FFFD + char
+        let input = br#""\uD800\u0041""#;
+        let mut de = Deserializer::from_slice(input).utf8_lossy();
+        let value: String = de.deserialize().unwrap();
+        assert_eq!(value, "\u{FFFD}A");
+
+        // multiple consecutive lone high surrogates
+        let input = br#""\uD800\uD801\uD802abc""#;
+        let mut de = Deserializer::from_slice(input).utf8_lossy();
+        let value: String = de.deserialize().unwrap();
+        assert_eq!(value, "\u{FFFD}\u{FFFD}\u{FFFD}abc");
+
+        // non-lossy mode should still error
+        let input = br#""\uD800abc""#;
+        let mut de = Deserializer::from_slice(input);
+        assert!(de.deserialize::<String>().is_err());
+    }
+
+    #[test]
+    fn test_serialize_float_non_trailing_zero() {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct FloatTest {
+            value: f64,
+        }
+
+        let test = FloatTest { value: 18.0 };
+        let json = to_string(&test).unwrap();
+
+        #[cfg(feature = "non_trailing_zero")]
+        assert_eq!(json, r#"{"value":18}"#);
+
+        #[cfg(not(feature = "non_trailing_zero"))]
+        assert_eq!(json, r#"{"value":18.0}"#);
+
+        let test = FloatTest { value: 18.1 };
+        let json = to_string(&test).unwrap();
+        assert_eq!(json, r#"{"value":18.1}"#);
     }
 }

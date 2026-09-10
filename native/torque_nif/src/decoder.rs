@@ -105,11 +105,7 @@ fn object_get<'v>(
     if unique_keys {
         value.get(key)
     } else {
-        value
-            .as_object()?
-            .iter()
-            .rfind(|(k, _)| *k == key)
-            .map(|(_, v)| v)
+        value.as_object()?.get_last(&key)
     }
 }
 
@@ -192,11 +188,11 @@ fn do_parse(bytes: &[u8], unique_keys: bool) -> Result<ResourceArc<ParsedDocumen
 }
 
 /// Build the `{:error, _}` term for a parse failure. The vendored sonic-rs caps
-/// DOM nesting and reports it with a "...layers deep" message; surface that as
-/// `:nesting_too_deep` for parity with decode/get/encode. Other errors keep the
+/// nesting and reports it with a "...layers deep" message; surface that as
+/// `:nesting_too_deep` for parity with get/encode. Other errors keep the
 /// sonic-rs message string.
 #[inline]
-fn parse_error_term<'a>(env: Env<'a>, reason: String) -> Term<'a> {
+pub(crate) fn parse_error_term<'a>(env: Env<'a>, reason: String) -> Term<'a> {
     let err_raw = atoms::error().as_c_arg();
     if reason.contains("layers deep") {
         make_tuple2(env, err_raw, atoms::nesting_too_deep().as_c_arg())

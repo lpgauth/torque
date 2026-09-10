@@ -142,7 +142,7 @@ impl Index for usize {
         let typ = v.get_type();
         let len = v.len();
         v.as_array_mut()
-            .unwrap_or_else(|| panic!("cannot access index in non-array value type {:?}", typ))
+            .unwrap_or_else(|| panic!("cannot access index in non-array value type {typ:?}"))
             .0
             .get_index_mut(*self)
             .unwrap_or_else(|| panic!("index {} out of bounds (len: {})", *self, len))
@@ -170,7 +170,7 @@ macro_rules! impl_str_index {
                     if !v.is_object() {
                         return None;
                     }
-                    v.get_key_mut(*self).map(|v| v.0)
+                    v.get_key_mut(*self)
                 }
 
                 #[inline]
@@ -184,11 +184,11 @@ macro_rules! impl_str_index {
                     obj.as_object_mut()
                         .expect(&format!("cannot access key in non-object value {:?}", typ))
                         .0
-                        .get_key_mut(*self).map_or_else(|| {
+                        .get_key_mut(*self).unwrap_or_else(|| {
                             let o =  unsafe { dormant_obj.reborrow() };
-                            let inserted = o.append_pair((Into::<Value>::into((*self)), Value::new_null()));
-                            &mut inserted.1
-                        }, |v| v.0)
+                            let inserted = o.insert(&self, Value::new_null());
+                            inserted
+                        })
                 }
 
                 #[inline]

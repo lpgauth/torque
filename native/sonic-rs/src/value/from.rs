@@ -21,7 +21,7 @@ impl From<Number> for Value {
         match val.n {
             N::PosInt(u) => Value::new_u64(u),
             N::NegInt(i) => Value::new_i64(i),
-            N::Float(f) => unsafe { Value::new_f64_unchecked(f) },
+            N::Float(f) => Value::new_f64_unchecked(f),
         }
     }
 }
@@ -563,10 +563,10 @@ mod test {
         let x: Value = map.iter().collect();
         assert_eq!(x, json!({"sonic_rs": 40, "json": 2}));
 
-        let v = std::iter::repeat(6).take(3);
+        let v = std::iter::repeat_n(6, 3);
         let x1: Vec<_> = v.collect();
         dbg!(x1);
-        let v = std::iter::repeat(6).take(3);
+        let v = std::iter::repeat_n(6, 3);
         let x: Value = v.collect();
         assert_eq!(x, json!([6, 6, 6]));
 

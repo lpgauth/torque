@@ -1,10 +1,10 @@
 use faststr::FastStr;
 
-/// Represents a json pointer path. It can be created by [`pointer`] macro.
-pub type JsonPointer = Vec<PointerNode>;
+/// Represents a json pointer path. It can be created by [`pointer!`] macro.
+pub type JsonPointer = [PointerNode];
 
 /// Represents a node in a json pointer path.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PointerNode {
     Key(FastStr),
     Index(usize),
@@ -46,12 +46,10 @@ pub enum PointerNode {
 #[macro_export]
 macro_rules! pointer {
     () => (
-        std::vec::Vec::<$crate::PointerNode>::new()
+        ([] as [$crate::PointerNode; 0])
     );
     ($($x:expr),+ $(,)?) => (
-        <[_]>::into_vec(
-            std::boxed::Box::new([$($crate::PointerNode::from($x)),+])
-        )
+        [$($crate::PointerNode::from($x)),+]
     );
 }
 
@@ -60,9 +58,9 @@ mod test {
     #[test]
     fn test_json_pointer() {
         let pointers = pointer![];
-        println!("{:?}", pointers);
-        let mut pointers = pointer![1, 2, 3, "foo", "bar"];
+        println!("{pointers:?}");
+        let mut pointers = pointer![1, 2, 3, "foo", "bar"].to_vec();
         pointers.push(123.into());
-        println!("{:?}", pointers);
+        println!("{pointers:?}");
     }
 }
