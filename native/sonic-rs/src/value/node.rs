@@ -1692,16 +1692,6 @@ impl<'de, 'a> JsonVisitor<'de> for DocumentVisitor<'a> {
         self.push_node(Value::pack_str(Meta::STR_NODE, idx, val))
     }
 
-    #[inline(always)]
-    fn visit_key(&mut self, key: &str) -> bool {
-        self.visit_str(key)
-    }
-
-    #[inline(always)]
-    fn visit_borrowed_key(&mut self, key: &'de str) -> bool {
-        self.visit_borrowed_str(key)
-    }
-
     fn visit_dom_end(&mut self) -> bool {
         self.visit_root();
         true

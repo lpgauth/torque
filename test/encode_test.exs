@@ -374,4 +374,103 @@ defmodule Torque.EncodeTest do
       assert {:ok, ~s({"a":[1e+16,-0.0]})} = Torque.encode(%{"a" => [1.0e16, -0.0]})
     end
   end
+
+  # Exercise every handoff between the prefix, SSE2, and AVX2 escape paths.
+  describe "string escaping across SWAR/SIMD length boundaries" do
+    @lengths [0, 1, 6, 7, 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 39, 63, 64, 65, 200]
+
+    # Place special bytes at representative offsets within an 8-byte word.
+    defp shapes do
+      %{
+        plain: fn n -> String.duplicate("a", n) end,
+        quote_first: fn n -> if n > 0, do: ~s(") <> String.duplicate("a", n - 1), else: "" end,
+        quote_last: fn n -> if n > 0, do: String.duplicate("a", n - 1) <> ~s("), else: "" end,
+        backslash_mid: fn n ->
+          if n > 8,
+            do: String.duplicate("a", 7) <> "\\" <> String.duplicate("a", n - 8),
+            else: String.duplicate("a", n)
+        end,
+        control: fn n -> if n > 0, do: String.duplicate("a", n - 1) <> <<1>>, else: "" end,
+        newline_last: fn n -> if n > 0, do: String.duplicate("a", n - 1) <> "\n", else: "" end,
+        unicode_last: fn n ->
+          if n > 1, do: String.duplicate("a", n - 2) <> "é", else: String.duplicate("a", n)
+        end,
+        unicode_first: fn n ->
+          if n > 1, do: "é" <> String.duplicate("a", n - 2), else: String.duplicate("a", n)
+        end,
+        unicode_only: fn n -> String.duplicate("é", div(n, 2)) end,
+        four_byte: fn n ->
+          if n >= 4, do: String.duplicate("a", n - 4) <> "🚀", else: String.duplicate("a", n)
+        end
+      }
+    end
+
+    test "values round-trip at every boundary length and escape position" do
+      for {name, build} <- shapes(), n <- @lengths do
+        s = build.(n)
+        {:ok, json} = Torque.encode(%{"k" => s})
+
+        assert Torque.decode!(json) == %{"k" => s},
+               "torque lost #{name}/#{n} (#{inspect(s)}) as #{inspect(json)}"
+
+        assert Jason.decode!(json) == %{"k" => s},
+               "jason lost #{name}/#{n} (#{inspect(s)}) as #{inspect(json)}"
+
+        assert json == Jason.encode!(%{"k" => s}),
+               "spelling differs from Jason for #{name}/#{n} (#{inspect(s)})"
+      end
+    end
+
+    test "keys round-trip at every boundary length and escape position" do
+      for {name, build} <- shapes(), n <- @lengths do
+        s = build.(n)
+        {:ok, json} = Torque.encode(%{s => 1})
+
+        assert Torque.decode!(json) == %{s => 1},
+               "torque lost key #{name}/#{n} (#{inspect(s)}) as #{inspect(json)}"
+
+        assert json == Jason.encode!(%{s => 1}),
+               "key spelling differs from Jason for #{name}/#{n} (#{inspect(s)})"
+      end
+    end
+
+    test "atom names take the same boundaries through the escape-only path" do
+      # Atom names use the non-validating path after Latin-1 conversion.
+      for n <- @lengths, n > 0 and n <= 200 do
+        for body <- [String.duplicate("a", n), String.duplicate("a", max(n - 2, 0)) <> "é"] do
+          atom = String.to_atom(body)
+          {:ok, json} = Torque.encode(%{atom => 1})
+
+          assert Torque.decode!(json) == %{body => 1},
+                 "atom key lost at #{n} (#{inspect(body)}) as #{inspect(json)}"
+        end
+      end
+    end
+
+    test "invalid UTF-8 is rejected at every boundary, whatever the clean prefix" do
+      # The prefix stops before non-ASCII so validation resumes at the lead byte.
+      for n <- @lengths,
+          bad <- [<<0xFF>>, <<0xC3, 0x28>>, <<0xE2, 0x28, 0xA1>>, <<0xED, 0xA0, 0x80>>] do
+        s = String.duplicate("a", n) <> bad
+
+        assert {:error, :invalid_utf8} = Torque.encode(%{"k" => s}),
+               "accepted invalid utf8 after #{n} clean bytes: #{inspect(s)}"
+
+        assert {:error, :invalid_utf8} = Torque.encode(%{s => 1}),
+               "accepted invalid utf8 key after #{n} clean bytes: #{inspect(s)}"
+      end
+    end
+
+    test "a clean prefix followed by an escape produces one contiguous string" do
+      # A wrong resume offset duplicates or drops the clean prefix.
+      for n <- 0..40 do
+        s = String.duplicate("x", n) <> ~s(") <> String.duplicate("y", n)
+        {:ok, json} = Torque.encode(s)
+
+        assert json ==
+                 ~s(") <> String.duplicate("x", n) <> ~s(\\") <> String.duplicate("y", n) <> ~s("),
+               "resume offset wrong at #{n}: #{inspect(json)}"
+      end
+    end
+  end
 end

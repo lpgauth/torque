@@ -27,7 +27,6 @@ thread_local! {
     static ENCODE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(2048));
 }
 
-#[derive(Debug)]
 enum EncodeError {
     UnsupportedType,
     NonFiniteFloat,
@@ -290,22 +289,20 @@ fn encode_map_key(
     key: Term,
     buf: &mut Vec<u8>,
 ) -> Result<(), EncodeError> {
+    // `enif_inspect_binary` doubles as the type check for the common binary-key
+    // path, avoiding a separate `enif_term_type` call.
+    let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
+    if unsafe { enif_inspect_binary(env_raw, key.as_c_arg(), bin.as_mut_ptr()) } != 0 {
+        let slice = unsafe {
+            let bin = bin.assume_init();
+            std::slice::from_raw_parts(bin.data, bin.size)
+        };
+        return crate::escape::write_json_string(slice, buf).map_err(|_| EncodeError::InvalidUtf8);
+    }
     buf.push(b'"');
     match key.get_type() {
         TermType::Atom => {
             write_atom_name(env_raw, key.as_c_arg(), buf)?;
-        }
-        TermType::Binary => {
-            let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
-            unsafe {
-                if enif_inspect_binary(env_raw, key.as_c_arg(), bin.as_mut_ptr()) == 0 {
-                    return Err(EncodeError::InvalidKey);
-                }
-                let bin = bin.assume_init();
-                let slice = std::slice::from_raw_parts(bin.data, bin.size);
-                crate::escape::validate_and_escape_to_vec(slice, buf)
-                    .map_err(|_| EncodeError::InvalidUtf8)?;
-            }
         }
         // Object names must be strings (RFC 8259 §4), so integer keys are
         // stringified rather than rejected, matching Jason. Skips escaping
@@ -356,17 +353,14 @@ fn encode_binary(
     buf: &mut Vec<u8>,
 ) -> Result<(), EncodeError> {
     let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
-    unsafe {
+    let slice = unsafe {
         if enif_inspect_binary(env_raw, term.as_c_arg(), bin.as_mut_ptr()) == 0 {
             return Err(EncodeError::UnsupportedType);
         }
         let bin = bin.assume_init();
-        let slice = std::slice::from_raw_parts(bin.data, bin.size);
-        buf.push(b'"');
-        crate::escape::validate_and_escape_to_vec(slice, buf)
-            .map_err(|_| EncodeError::InvalidUtf8)?;
-        buf.push(b'"');
-    }
+        std::slice::from_raw_parts(bin.data, bin.size)
+    };
+    crate::escape::write_json_string(slice, buf).map_err(|_| EncodeError::InvalidUtf8)?;
     Ok(())
 }
 
