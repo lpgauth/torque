@@ -38,11 +38,21 @@ jobs:
           key: bench-mix-${{ hashFiles('mix.lock') }}
           restore-keys: bench-mix-
 
+      # The instrumented and PGO builds below use target-cpu=native, and
+      # without --target cargo applies RUSTFLAGS to proc macros too. A cached
+      # proc-macro .so compiled on a runner with a wider instruction set makes
+      # rustc die with SIGILL when it loads it, so the cache is keyed on the
+      # CPU model as well.
+      - name: Read runner CPU model
+        id: cpu
+        run: echo "model=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
+
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v0-bench
+          prefix-key: v1-bench
           shared-key: x86_64-unknown-linux-gnu
+          key: ${{ steps.cpu.outputs.model }}
 
       - name: Install dependencies
         run: mix deps.get
