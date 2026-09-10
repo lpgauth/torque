@@ -502,7 +502,7 @@ pub fn decode_to_term<'a>(env: Env<'a>, input_term: ERL_NIF_TERM, bytes: &[u8]) 
                         atoms::nesting_too_deep().as_c_arg(),
                     )
                 } else {
-                    parse_error_term(env, format!("{}", e))
+                    parse_error_term(env, &e)
                 }
             }
         };

@@ -212,24 +212,24 @@ fn pointer_lookup<'v>(
     Some(current)
 }
 
-fn do_parse(bytes: &[u8], unique_keys: bool) -> Result<ResourceArc<ParsedDocument>, String> {
-    match sonic_rs::from_slice::<sonic_rs::Value>(bytes) {
-        Ok(value) => Ok(ResourceArc::new(ParsedDocument { value, unique_keys })),
-        Err(e) => Err(format!("{}", e)),
-    }
+fn do_parse(
+    bytes: &[u8],
+    unique_keys: bool,
+) -> Result<ResourceArc<ParsedDocument>, sonic_rs::Error> {
+    let value = sonic_rs::from_slice::<sonic_rs::Value>(bytes)?;
+    Ok(ResourceArc::new(ParsedDocument { value, unique_keys }))
 }
 
 /// Build the `{:error, _}` term for a parse failure. The vendored sonic-rs caps
-/// nesting and reports it with a "...layers deep" message; surface that as
-/// `:nesting_too_deep` for parity with get/encode. Other errors keep the
-/// sonic-rs message string.
+/// nesting; surface that as `:nesting_too_deep` for parity with get/encode.
+/// Other errors keep the sonic-rs message string.
 #[inline]
-pub(crate) fn parse_error_term<'a>(env: Env<'a>, reason: String) -> Term<'a> {
+pub(crate) fn parse_error_term<'a>(env: Env<'a>, err: &sonic_rs::Error) -> Term<'a> {
     let err_raw = atoms::error().as_c_arg();
-    if reason.contains("layers deep") {
+    if err.is_recursion_limit() {
         make_tuple2(env, err_raw, atoms::nesting_too_deep().as_c_arg())
     } else {
-        make_tuple2(env, err_raw, reason.encode(env).as_c_arg())
+        make_tuple2(env, err_raw, format!("{}", err).encode(env).as_c_arg())
     }
 }
 
@@ -240,7 +240,7 @@ fn parse<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
             schedule::consume_timeslice(env, timeslice_percent(json.len()));
             make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg())
         }
-        Err(reason) => parse_error_term(env, reason),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
@@ -248,7 +248,7 @@ fn parse<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
 fn parse_dirty<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
     match do_parse(json.as_slice(), false) {
         Ok(resource) => make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg()),
-        Err(reason) => parse_error_term(env, reason),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
@@ -259,7 +259,7 @@ fn parse_opts<'a>(env: Env<'a>, json: Binary, unique_keys: bool) -> Term<'a> {
             schedule::consume_timeslice(env, timeslice_percent(json.len()));
             make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg())
         }
-        Err(reason) => parse_error_term(env, reason),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
@@ -267,7 +267,7 @@ fn parse_opts<'a>(env: Env<'a>, json: Binary, unique_keys: bool) -> Term<'a> {
 fn parse_opts_dirty<'a>(env: Env<'a>, json: Binary, unique_keys: bool) -> Term<'a> {
     match do_parse(json.as_slice(), unique_keys) {
         Ok(resource) => make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg()),
-        Err(reason) => parse_error_term(env, reason),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
@@ -466,7 +466,7 @@ fn do_parse_get_many_nil<'a>(
             let list = extract_compiled(env, &value, compiled, nodes);
             make_tuple2(env, atoms::ok().as_c_arg(), list.as_c_arg())
         }
-        Err(e) => parse_error_term(env, format!("{}", e)),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
