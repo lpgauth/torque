@@ -19,7 +19,7 @@ cargo clippy -- -D warnings        # Rust linter
 MIX_ENV=bench mix run bench/torque_bench.exs  # run benchmarks
 ```
 
-`TORQUE_BUILD=true` is required for local development to force compilation from Rust source instead of downloading precompiled binaries. Without it, `RustlerPrecompiled` will try to fetch binaries from GitHub releases.
+`TORQUE_BUILD=true` is required for local development to force compilation from Rust source instead of downloading precompiled binaries. Without it, `RustlerPrecompiled` will try to fetch binaries from GitHub releases. The flag is read when `Torque.Native` compiles, so `Torque.Build` (`lib/torque/build.ex`) makes it part of that module's staleness through `__mix_recompile__?/0`: without it a `_build` tree made without the variable keeps loading a downloaded NIF however later commands are invoked, which silently runs a *released* binary against local Rust changes and reports a green suite. The check cannot live in `Torque.Native`, because a module whose `on_load` fails is not loadable and Mix cannot ask it anything.
 
 ## Profile-Guided Optimisation (PGO)
 
@@ -31,8 +31,10 @@ Produces an optimised `priv/native/torque_nif.so` (typically 5-15% faster on
 JSON-heavy work than plain `-O3`). The script builds an instrumented NIF, runs
 `bench/pgo_workload.exs` to collect branch/call-frequency data, merges the raw
 `*.profraw` counters with `llvm-profdata`, then rebuilds with `-Cprofile-use`.
-Like any `TORQUE_BUILD` build it overwrites `priv/native/torque_nif.so`, so
-re-run `mix compile` (without PGO) to get back to a plain build.
+Like any `TORQUE_BUILD` build it overwrites `priv/native/torque_nif.so`. Run
+`TORQUE_BUILD=true mix compile --force` to restore a plain build: the variable
+selects the source build, and `--force` replaces the profiled artifact even when
+the sources are unchanged.
 
 Notes:
 - rustc is LLVM-based, so PGO uses the same `llvm-profdata merge` step as a
@@ -104,6 +106,11 @@ Torque is a high-performance JSON library for Elixir using Rustler NIFs backed b
 
 `encode/1` walks Elixir terms directly (no intermediate representation) and writes JSON bytes to a buffer. Supports maps (atom/binary/integer keys — integer keys are stringified, since JSON object names must be strings), lists, numbers, booleans, nil, and jiffy-style `{proplist}` tuples.
 
+Strings go through `escape.rs`'s `write_json_string`, which reserves once for the quotes and worst-case body and scans strings shorter than `SHORT_STRING` (32 bytes) eight bytes at a time before handing the first special byte to the SIMD kernels. It returns a resume offset rather than a clean/dirty verdict, so a late escape does not rescan the clean prefix. The six SIMD kernels repeat the same emit blocks by hand on purpose: factoring them into helpers changes how they inline under the fat-LTO build and measured slower on escape-heavy and UTF-8-heavy input.
+
+Atom names are read as Latin-1 into a stack buffer, because `ERL_NIF_UTF8` needs NIF 2.17 and the NIF still loads on 2.15. A name with any character above U+00FF makes that read fail, so those atoms go through `enif_term_to_binary` and the name is taken from the `SMALL_ATOM_UTF8_EXT` / `ATOM_UTF8_EXT` payload instead. Only the names the Latin-1 read rejects pay for that binary.
+
+
 ### Scheduler Awareness
 
 Decode/parse inputs larger than 20 KB are automatically dispatched to dirty CPU schedulers to avoid blocking normal BEAM schedulers. Encoding cannot cheaply predict output size, so dirty dispatch is opt-in via `dirty: true` on `encode/2`, `encode!/2`, and `encode_to_iodata/2`. The `get/2` NIF always runs on a normal scheduler (sub-microsecond pointer traversal).
@@ -124,6 +131,7 @@ Decode/parse inputs larger than 20 KB are automatically dispatched to dirty CPU 
 
 - `lib/torque.ex` — public API with `@doc`, typespecs, dirty scheduler dispatch
 - `lib/torque/native.ex` — RustlerPrecompiled NIF stubs (set `TORQUE_BUILD=true` to compile from source)
+- `lib/torque/build.ex` — captures `TORQUE_BUILD` and makes switching it recompile `Torque.Native`
 - `native/torque_nif/src/lib.rs` — NIF registration, `ParsedDocument` + `CompiledPaths` (`PathSeg`) resources
 - `native/torque_nif/src/decoder.rs` — parse, get, get_many, get_many_nil, decode NIFs; compiled-pointer + fused `parse_get_many_nil` path
 - `native/torque_nif/src/native_decode.rs` — fused decoder; builds terms during the SIMD parse via sonic-rs's `JsonVisitor`

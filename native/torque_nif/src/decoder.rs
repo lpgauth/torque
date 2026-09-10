@@ -91,6 +91,19 @@ impl TermAcc {
     }
 }
 
+/// Parses an RFC 6901 array index. Numeric tokens with leading zeroes remain
+/// object keys so raw and compiled pointers resolve them identically.
+#[inline]
+fn array_index(token: &str) -> Option<usize> {
+    let b = token.as_bytes();
+    match b {
+        [] => None,
+        [b'0'] => Some(0),
+        [first, ..] if first.is_ascii_digit() && *first != b'0' => token.parse().ok(),
+        _ => None,
+    }
+}
+
 /// Looks up `key` in an object.
 ///
 /// When `unique_keys` is true, uses sonic-rs's internal index (fast).
@@ -109,6 +122,23 @@ fn object_get<'v>(
     }
 }
 
+/// RFC 6901 permits only `~0` and `~1`; any other `~` is malformed.
+#[inline]
+fn escapes_valid(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'~' {
+            match bytes.get(i + 1) {
+                Some(b'0') | Some(b'1') => i += 2,
+                _ => return false,
+            }
+        } else {
+            i += 1;
+        }
+    }
+    true
+}
 #[inline]
 fn pointer_lookup<'v>(
     value: &'v sonic_rs::Value,
@@ -128,14 +158,16 @@ fn pointer_lookup<'v>(
 
     let mut current = value;
     for segment in path[1..].split('/') {
-        let seg_bytes = segment.as_bytes();
-        if current.is_array() && !seg_bytes.is_empty() && seg_bytes[0].is_ascii_digit() {
-            if let Ok(index) = segment.parse::<usize>() {
+        if current.is_array() {
+            if let Some(index) = array_index(segment) {
                 current = current.get(index)?;
                 continue;
             }
         }
         if segment.contains('~') {
+            if !escapes_valid(segment) {
+                return None;
+            }
             if segment.len() > 512 {
                 let unescaped = segment.replace("~1", "/").replace("~0", "~");
                 current = object_get(current, &unescaped, unique_keys)?;
@@ -180,24 +212,24 @@ fn pointer_lookup<'v>(
     Some(current)
 }
 
-fn do_parse(bytes: &[u8], unique_keys: bool) -> Result<ResourceArc<ParsedDocument>, String> {
-    match sonic_rs::from_slice::<sonic_rs::Value>(bytes) {
-        Ok(value) => Ok(ResourceArc::new(ParsedDocument { value, unique_keys })),
-        Err(e) => Err(format!("{}", e)),
-    }
+fn do_parse(
+    bytes: &[u8],
+    unique_keys: bool,
+) -> Result<ResourceArc<ParsedDocument>, sonic_rs::Error> {
+    let value = sonic_rs::from_slice::<sonic_rs::Value>(bytes)?;
+    Ok(ResourceArc::new(ParsedDocument { value, unique_keys }))
 }
 
 /// Build the `{:error, _}` term for a parse failure. The vendored sonic-rs caps
-/// nesting and reports it with a "...layers deep" message; surface that as
-/// `:nesting_too_deep` for parity with get/encode. Other errors keep the
-/// sonic-rs message string.
+/// nesting; surface that as `:nesting_too_deep` for parity with get/encode.
+/// Other errors keep the sonic-rs message string.
 #[inline]
-pub(crate) fn parse_error_term<'a>(env: Env<'a>, reason: String) -> Term<'a> {
+pub(crate) fn parse_error_term<'a>(env: Env<'a>, err: &sonic_rs::Error) -> Term<'a> {
     let err_raw = atoms::error().as_c_arg();
-    if reason.contains("layers deep") {
+    if err.is_recursion_limit() {
         make_tuple2(env, err_raw, atoms::nesting_too_deep().as_c_arg())
     } else {
-        make_tuple2(env, err_raw, reason.encode(env).as_c_arg())
+        make_tuple2(env, err_raw, format!("{}", err).encode(env).as_c_arg())
     }
 }
 
@@ -208,7 +240,7 @@ fn parse<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
             schedule::consume_timeslice(env, timeslice_percent(json.len()));
             make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg())
         }
-        Err(reason) => parse_error_term(env, reason),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
@@ -216,7 +248,7 @@ fn parse<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
 fn parse_dirty<'a>(env: Env<'a>, json: Binary) -> Term<'a> {
     match do_parse(json.as_slice(), false) {
         Ok(resource) => make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg()),
-        Err(reason) => parse_error_term(env, reason),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
@@ -227,7 +259,7 @@ fn parse_opts<'a>(env: Env<'a>, json: Binary, unique_keys: bool) -> Term<'a> {
             schedule::consume_timeslice(env, timeslice_percent(json.len()));
             make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg())
         }
-        Err(reason) => parse_error_term(env, reason),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
@@ -235,7 +267,7 @@ fn parse_opts<'a>(env: Env<'a>, json: Binary, unique_keys: bool) -> Term<'a> {
 fn parse_opts_dirty<'a>(env: Env<'a>, json: Binary, unique_keys: bool) -> Term<'a> {
     match do_parse(json.as_slice(), unique_keys) {
         Ok(resource) => make_tuple2(env, atoms::ok().as_c_arg(), resource.encode(env).as_c_arg()),
-        Err(reason) => parse_error_term(env, reason),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 
@@ -350,27 +382,33 @@ use crate::{CompiledPaths, PathSeg};
 /// `Num`, keeping both the parsed index and the literal key so the lookup can
 /// pick the right interpretation per node (array index vs. object key) —
 /// matching the runtime behaviour of `pointer_lookup`.
-fn compile_one(path: &str) -> Vec<PathSeg> {
+fn compile_one(path: &str) -> NifResult<Vec<PathSeg>> {
     let mut segs = Vec::new();
-    if path.len() <= 1 {
-        return segs;
+    // Torque treats both empty and slash-only pointers as the document root.
+    if path.is_empty() || path == "/" {
+        return Ok(segs);
     }
-    for segment in path[1..].split('/') {
-        let b = segment.as_bytes();
+    // Reject non-pointers before slicing. A multibyte leading character could
+    // otherwise panic inside the NIF.
+    let rest = match path.strip_prefix('/') {
+        Some(rest) => rest,
+        None => return Err(rustler::Error::BadArg),
+    };
+    for segment in rest.split('/') {
         let key = if segment.contains('~') {
+            if !escapes_valid(segment) {
+                return Err(rustler::Error::BadArg);
+            }
             segment.replace("~1", "/").replace("~0", "~")
         } else {
             segment.to_string()
         };
-        if !b.is_empty() && b[0].is_ascii_digit() {
-            if let Ok(idx) = segment.parse::<usize>() {
-                segs.push(PathSeg::Num { idx, key });
-                continue;
-            }
+        match array_index(segment) {
+            Some(idx) => segs.push(PathSeg::Num { idx, key }),
+            None => segs.push(PathSeg::Key(key)),
         }
-        segs.push(PathSeg::Key(key));
     }
-    segs
+    Ok(segs)
 }
 
 #[rustler::nif]
@@ -384,7 +422,7 @@ fn compile_paths<'a>(
         // Non-binary (or non-UTF-8) entries are caller bugs: badarg. Silently
         // compiling them (e.g. as "") would return the whole document.
         let p: &str = pt.decode()?;
-        out.push(compile_one(p));
+        out.push(compile_one(p)?);
     }
     Ok(ResourceArc::new(CompiledPaths {
         paths: out,
@@ -428,7 +466,7 @@ fn do_parse_get_many_nil<'a>(
             let list = extract_compiled(env, &value, compiled, nodes);
             make_tuple2(env, atoms::ok().as_c_arg(), list.as_c_arg())
         }
-        Err(e) => parse_error_term(env, format!("{}", e)),
+        Err(e) => parse_error_term(env, &e),
     }
 }
 

@@ -135,6 +135,48 @@ defmodule Torque.EncodeTest do
       assert %{"café" => 1} = Jason.decode!(json)
     end
 
+    test "an atom above Latin-1 encodes as UTF-8 everywhere an atom is accepted" do
+      # `enif_get_atom` cannot spell these below NIF 2.17, so they used to come
+      # back `:unsupported_type` while `:café` encoded. Cover the boundary in
+      # both directions and every position an atom can occupy.
+      atoms = [
+        :ok,
+        :"",
+        :"\0",
+        :"before\0after",
+        :"\u00ff",
+        :"\u0100",
+        :Ω,
+        :"🚀",
+        :日本語,
+        :"é🚀ü",
+        :"a\"b\\c\n",
+        String.to_atom(String.duplicate("a", 255)),
+        String.to_atom(String.duplicate("ÿ", 255)),
+        String.to_atom(String.duplicate("🚀", 255))
+      ]
+
+      for atom <- atoms do
+        for term <- [atom, [atom], %{atom => 1}, %{"k" => atom}] do
+          assert Torque.encode(term) == Jason.encode(term),
+                 "#{inspect(atom)} in #{inspect(term) |> String.slice(0, 40)}"
+        end
+
+        # Jason has no `{proplist}` form, so hold it to the map's output.
+        assert Torque.encode({[{atom, 1}]}) == Torque.encode(%{atom => 1}),
+               "#{inspect(atom)} as a proplist key"
+      end
+    end
+
+    test "the widest atom name survives the Unicode fallback" do
+      # 255 characters is the ERTS cap; in UTF-8 that is 1020 bytes, four times
+      # what the Latin-1 stack buffer holds.
+      wide = String.duplicate("🚀", 255)
+      assert byte_size(wide) == 1020
+      assert {:ok, json} = Torque.encode(%{String.to_atom(wide) => 1})
+      assert %{^wide => 1} = Jason.decode!(json)
+    end
+
     test "improper list returns error" do
       assert {:error, :unsupported_type} = Torque.encode([1 | 2])
       assert {:error, :unsupported_type} = Torque.encode(%{"a" => [1 | 2]})
@@ -290,6 +332,145 @@ defmodule Torque.EncodeTest do
       Code.ensure_loaded!(Torque)
       assert function_exported?(Torque, :encode_to_iodata!, 1)
       assert function_exported?(Torque, :decode!, 1)
+    end
+  end
+
+  describe "float formatting" do
+    # Formatter spelling is part of the output contract and must round-trip
+    # through independent decoders.
+    @floats [
+      0.0,
+      -0.0,
+      1.0,
+      18.0,
+      3.14,
+      1.0e-7,
+      1.0e15,
+      1.0e16,
+      2.5e-11,
+      5.0e-324,
+      1.7976931348623157e308
+    ]
+
+    test "every float round-trips through Torque and through Jason" do
+      for f <- @floats do
+        {:ok, json} = Torque.encode(f)
+        assert Jason.decode!(json) === f, "Jason lost #{inspect(f)} as #{json}"
+        assert Torque.decode!(json) === f, "Torque lost #{inspect(f)} as #{json}"
+      end
+    end
+
+    test "notation boundaries and signed zero keep their spelling" do
+      assert {:ok, "0.0"} = Torque.encode(0.0)
+      assert {:ok, "-0.0"} = Torque.encode(-0.0)
+      assert {:ok, "18.0"} = Torque.encode(18.0)
+      # Pin the formatter's notation boundary and exponent sign.
+      assert {:ok, "1000000000000000.0"} = Torque.encode(1.0e15)
+      assert {:ok, "1e+16"} = Torque.encode(1.0e16)
+      assert {:ok, "1e-7"} = Torque.encode(1.0e-7)
+    end
+
+    test "floats nested in containers format the same way" do
+      assert {:ok, ~s({"a":[1e+16,-0.0]})} = Torque.encode(%{"a" => [1.0e16, -0.0]})
+    end
+  end
+
+  # Exercise every handoff between the prefix, SSE2, and AVX2 escape paths.
+  describe "string escaping across SWAR/SIMD length boundaries" do
+    @lengths [0, 1, 6, 7, 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 39, 63, 64, 65, 200]
+
+    # Place special bytes at representative offsets within an 8-byte word.
+    defp shapes do
+      %{
+        plain: fn n -> String.duplicate("a", n) end,
+        quote_first: fn n -> if n > 0, do: ~s(") <> String.duplicate("a", n - 1), else: "" end,
+        quote_last: fn n -> if n > 0, do: String.duplicate("a", n - 1) <> ~s("), else: "" end,
+        backslash_mid: fn n ->
+          if n > 8,
+            do: String.duplicate("a", 7) <> "\\" <> String.duplicate("a", n - 8),
+            else: String.duplicate("a", n)
+        end,
+        control: fn n -> if n > 0, do: String.duplicate("a", n - 1) <> <<1>>, else: "" end,
+        newline_last: fn n -> if n > 0, do: String.duplicate("a", n - 1) <> "\n", else: "" end,
+        unicode_last: fn n ->
+          if n > 1, do: String.duplicate("a", n - 2) <> "é", else: String.duplicate("a", n)
+        end,
+        unicode_first: fn n ->
+          if n > 1, do: "é" <> String.duplicate("a", n - 2), else: String.duplicate("a", n)
+        end,
+        unicode_only: fn n -> String.duplicate("é", div(n, 2)) end,
+        four_byte: fn n ->
+          if n >= 4, do: String.duplicate("a", n - 4) <> "🚀", else: String.duplicate("a", n)
+        end
+      }
+    end
+
+    test "values round-trip at every boundary length and escape position" do
+      for {name, build} <- shapes(), n <- @lengths do
+        s = build.(n)
+        {:ok, json} = Torque.encode(%{"k" => s})
+
+        assert Torque.decode!(json) == %{"k" => s},
+               "torque lost #{name}/#{n} (#{inspect(s)}) as #{inspect(json)}"
+
+        assert Jason.decode!(json) == %{"k" => s},
+               "jason lost #{name}/#{n} (#{inspect(s)}) as #{inspect(json)}"
+
+        assert json == Jason.encode!(%{"k" => s}),
+               "spelling differs from Jason for #{name}/#{n} (#{inspect(s)})"
+      end
+    end
+
+    test "keys round-trip at every boundary length and escape position" do
+      for {name, build} <- shapes(), n <- @lengths do
+        s = build.(n)
+        {:ok, json} = Torque.encode(%{s => 1})
+
+        assert Torque.decode!(json) == %{s => 1},
+               "torque lost key #{name}/#{n} (#{inspect(s)}) as #{inspect(json)}"
+
+        assert json == Jason.encode!(%{s => 1}),
+               "key spelling differs from Jason for #{name}/#{n} (#{inspect(s)})"
+      end
+    end
+
+    test "atom names take the same boundaries through the escape-only path" do
+      # Atom names use the non-validating path after Latin-1 conversion.
+      for n <- @lengths, n > 0 and n <= 200 do
+        for body <- [String.duplicate("a", n), String.duplicate("a", max(n - 2, 0)) <> "é"] do
+          atom = String.to_atom(body)
+          {:ok, json} = Torque.encode(%{atom => 1})
+
+          assert Torque.decode!(json) == %{body => 1},
+                 "atom key lost at #{n} (#{inspect(body)}) as #{inspect(json)}"
+        end
+      end
+    end
+
+    test "invalid UTF-8 is rejected at every boundary, whatever the clean prefix" do
+      # The prefix stops before non-ASCII so validation resumes at the lead byte.
+      for n <- @lengths,
+          bad <- [<<0xFF>>, <<0xC3, 0x28>>, <<0xE2, 0x28, 0xA1>>, <<0xED, 0xA0, 0x80>>] do
+        s = String.duplicate("a", n) <> bad
+
+        assert {:error, :invalid_utf8} = Torque.encode(%{"k" => s}),
+               "accepted invalid utf8 after #{n} clean bytes: #{inspect(s)}"
+
+        assert {:error, :invalid_utf8} = Torque.encode(%{s => 1}),
+               "accepted invalid utf8 key after #{n} clean bytes: #{inspect(s)}"
+      end
+    end
+
+    test "a clean prefix followed by an escape produces one contiguous string" do
+      # A wrong resume offset duplicates or drops the clean prefix.
+      for n <- 0..40 do
+        s = String.duplicate("x", n) <> ~s(") <> String.duplicate("y", n)
+        {:ok, json} = Torque.encode(s)
+
+        assert json ==
+                 ~s(") <> String.duplicate("x", n) <> ~s(\\") <> String.duplicate("y", n) <> ~s("),
+               "resume offset wrong at #{n}: #{inspect(json)}"
+      end
     end
   end
 end

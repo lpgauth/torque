@@ -2,9 +2,9 @@ use crate::atoms;
 use crate::nif_util::{make_tuple2, timeslice_percent};
 use crate::types::MAX_DEPTH;
 use rustler::sys::{
-    c_int, c_uint, enif_get_atom, enif_get_atom_length, enif_get_double, enif_get_int64,
-    enif_get_list_cell, enif_get_tuple, enif_get_uint64, enif_inspect_binary, enif_is_empty_list,
-    ErlNifBinary, ErlNifCharEncoding, ErlNifEnv, ERL_NIF_TERM,
+    c_int, c_uint, enif_get_atom, enif_get_double, enif_get_int64, enif_get_list_cell,
+    enif_get_tuple, enif_get_uint64, enif_inspect_binary, enif_is_empty_list, enif_release_binary,
+    enif_term_to_binary, ErlNifBinary, ErlNifCharEncoding, ErlNifEnv, ERL_NIF_TERM,
 };
 use rustler::{schedule, Env, MapIterator, NewBinary, Term, TermType};
 use std::cell::RefCell;
@@ -27,7 +27,6 @@ thread_local! {
     static ENCODE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(2048));
 }
 
-#[derive(Debug)]
 enum EncodeError {
     UnsupportedType,
     NonFiniteFloat,
@@ -63,40 +62,84 @@ fn buf_to_binary<'a>(env: Env<'a>, buf: &[u8], report_timeslice: bool) -> Term<'
 }
 
 /// Read an atom's name into a stack buffer without heap allocation.
+///
+/// Latin-1, because `ERL_NIF_UTF8` is a NIF 2.17 (OTP 26) addition and this
+/// NIF still loads on 2.15. Reports `None` rather than an error for a name
+/// holding a character above U+00FF; `write_atom_name` reads those a slower
+/// way. Only atoms reach here, so failure has no other cause.
 #[inline]
 unsafe fn atom_to_stack_buf(
     env_raw: *mut ErlNifEnv,
     term_raw: ERL_NIF_TERM,
     buf: &mut [u8; 256],
-) -> Result<&[u8], EncodeError> {
-    let mut len: c_uint = 0;
-    if enif_get_atom_length(
-        env_raw,
-        term_raw,
-        &mut len,
-        ErlNifCharEncoding::ERL_NIF_LATIN1,
-    ) == 0
-    {
-        return Err(EncodeError::UnsupportedType);
-    }
-    let alen = (len + 1) as usize;
-    if alen > 256 {
-        return Err(EncodeError::UnsupportedType);
-    }
-    enif_get_atom(
+) -> Option<&[u8]> {
+    let len = enif_get_atom(
         env_raw,
         term_raw,
         buf.as_mut_ptr(),
-        alen as c_uint,
+        buf.len() as c_uint,
         ErlNifCharEncoding::ERL_NIF_LATIN1,
     );
-    Ok(&buf[..len as usize])
+    if len == 0 {
+        None
+    } else {
+        // The return count includes the terminator, not just the prefix before
+        // an embedded NUL. Even an empty atom therefore returns one.
+        Some(&buf[..len as usize - 1])
+    }
+}
+
+/// External term format tags for a UTF-8 atom: `SMALL_ATOM_UTF8_EXT` carries a
+/// one-byte length, `ATOM_UTF8_EXT` a two-byte big-endian one.
+const SMALL_ATOM_UTF8_EXT: u8 = 119;
+const ATOM_UTF8_EXT: u8 = 118;
+
+/// Append an atom whose name leaves the Latin-1 range, as escaped UTF-8.
+///
+/// `enif_get_atom` cannot spell these below NIF 2.17, but `enif_term_to_binary`
+/// can: an atom that is not Latin-1 representable always serialises as one of
+/// the two UTF-8 atom tags, whose payload is the name. That costs a binary per
+/// atom, which is why only the atoms the fast path rejects come here.
+#[cold]
+fn write_wide_atom_name(
+    env_raw: *mut ErlNifEnv,
+    term_raw: ERL_NIF_TERM,
+    buf: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
+    if unsafe { enif_term_to_binary(env_raw, term_raw, bin.as_mut_ptr()) } == 0 {
+        return Err(EncodeError::UnsupportedType);
+    }
+    let mut bin = unsafe { bin.assume_init() };
+    let bytes = unsafe { std::slice::from_raw_parts(bin.data, bin.size) };
+
+    // `131`, tag, length, name.
+    let name = match bytes {
+        [131, SMALL_ATOM_UTF8_EXT, len, rest @ ..] if rest.len() >= *len as usize => {
+            Some(&rest[..*len as usize])
+        }
+        [131, ATOM_UTF8_EXT, hi, lo, rest @ ..]
+            if rest.len() >= u16::from_be_bytes([*hi, *lo]) as usize =>
+        {
+            Some(&rest[..u16::from_be_bytes([*hi, *lo]) as usize])
+        }
+        _ => None,
+    };
+    let result = match name {
+        Some(name) => {
+            crate::escape::escape_to_vec(name, buf);
+            Ok(())
+        }
+        None => Err(EncodeError::UnsupportedType),
+    };
+    unsafe { enif_release_binary(&mut bin) };
+    result
 }
 
 /// Append an atom's name to `buf` as an escaped JSON string body (no quotes).
 ///
-/// `enif_get_atom` yields Latin-1 bytes; bytes >= 0x80 are transcoded to
-/// two-byte UTF-8 sequences so the emitted JSON stays valid UTF-8.
+/// The Latin-1 read yields bytes >= 0x80 for the U+0080..U+00FF range, which
+/// are transcoded to two-byte UTF-8 so the emitted JSON stays valid.
 #[inline]
 fn write_atom_name(
     env_raw: *mut ErlNifEnv,
@@ -104,7 +147,9 @@ fn write_atom_name(
     buf: &mut Vec<u8>,
 ) -> Result<(), EncodeError> {
     let mut atom_buf = [0u8; 256];
-    let name = unsafe { atom_to_stack_buf(env_raw, term_raw, &mut atom_buf)? };
+    let Some(name) = (unsafe { atom_to_stack_buf(env_raw, term_raw, &mut atom_buf) }) else {
+        return write_wide_atom_name(env_raw, term_raw, buf);
+    };
     if name.is_ascii() {
         crate::escape::escape_to_vec(name, buf);
     } else {
@@ -244,22 +289,20 @@ fn encode_map_key(
     key: Term,
     buf: &mut Vec<u8>,
 ) -> Result<(), EncodeError> {
+    // `enif_inspect_binary` doubles as the type check for the common binary-key
+    // path, avoiding a separate `enif_term_type` call.
+    let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
+    if unsafe { enif_inspect_binary(env_raw, key.as_c_arg(), bin.as_mut_ptr()) } != 0 {
+        let slice = unsafe {
+            let bin = bin.assume_init();
+            std::slice::from_raw_parts(bin.data, bin.size)
+        };
+        return crate::escape::write_json_string(slice, buf).map_err(|_| EncodeError::InvalidUtf8);
+    }
     buf.push(b'"');
     match key.get_type() {
         TermType::Atom => {
             write_atom_name(env_raw, key.as_c_arg(), buf)?;
-        }
-        TermType::Binary => {
-            let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
-            unsafe {
-                if enif_inspect_binary(env_raw, key.as_c_arg(), bin.as_mut_ptr()) == 0 {
-                    return Err(EncodeError::InvalidKey);
-                }
-                let bin = bin.assume_init();
-                let slice = std::slice::from_raw_parts(bin.data, bin.size);
-                crate::escape::validate_and_escape_to_vec(slice, buf)
-                    .map_err(|_| EncodeError::InvalidUtf8)?;
-            }
         }
         // Object names must be strings (RFC 8259 §4), so integer keys are
         // stringified rather than rejected, matching Jason. Skips escaping
@@ -310,17 +353,14 @@ fn encode_binary(
     buf: &mut Vec<u8>,
 ) -> Result<(), EncodeError> {
     let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
-    unsafe {
+    let slice = unsafe {
         if enif_inspect_binary(env_raw, term.as_c_arg(), bin.as_mut_ptr()) == 0 {
             return Err(EncodeError::UnsupportedType);
         }
         let bin = bin.assume_init();
-        let slice = std::slice::from_raw_parts(bin.data, bin.size);
-        buf.push(b'"');
-        crate::escape::validate_and_escape_to_vec(slice, buf)
-            .map_err(|_| EncodeError::InvalidUtf8)?;
-        buf.push(b'"');
-    }
+        std::slice::from_raw_parts(bin.data, bin.size)
+    };
+    crate::escape::write_json_string(slice, buf).map_err(|_| EncodeError::InvalidUtf8)?;
     Ok(())
 }
 
@@ -361,12 +401,12 @@ fn encode_float(env_raw: *mut ErlNifEnv, term: Term, buf: &mut Vec<u8>) -> Resul
     if unsafe { enif_get_double(env_raw, term.as_c_arg(), &mut n) } == 0 {
         return Err(EncodeError::UnsupportedType);
     }
-    // ryu panics on non-finite floats; JSON has no representation for them
+    // JSON has no non-finite numbers, and `format_finite` requires this check.
     if !n.is_finite() {
         return Err(EncodeError::NonFiniteFloat);
     }
-    let mut ryu_buf = ryu::Buffer::new();
-    buf.extend_from_slice(ryu_buf.format(n).as_bytes());
+    let mut fbuf = zmij::Buffer::new();
+    buf.extend_from_slice(fbuf.format_finite(n).as_bytes());
     Ok(())
 }
 

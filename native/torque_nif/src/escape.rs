@@ -2,7 +2,7 @@
 //
 // Entry points:
 //   `escape_to_vec(bytes, buf)` — escape only (for known-valid UTF-8, e.g. atom names)
-//   `validate_and_escape_to_vec(bytes, buf)` — fused UTF-8 validation + escape
+//   `write_json_string(bytes, buf)` — validate, escape, and add quotes
 //
 // Platform dispatch:
 //   aarch64 → NEON (vmaxvq_u8 / UMAXV, mandatory on AArch64)
@@ -67,6 +67,62 @@ const fn build_needs_escape() -> [bool; 256] {
 static NEEDS_ESCAPE: [bool; 256] = build_needs_escape();
 
 // ---------------------------------------------------------------------------
+// Short-string fast path
+// ---------------------------------------------------------------------------
+
+/// Strings shorter than this use the scalar prefix path before SIMD dispatch.
+const SHORT_STRING: usize = 32;
+
+const ONES: u64 = 0x0101_0101_0101_0101;
+const HIGH: u64 = 0x8080_8080_8080_8080;
+
+/// True when any byte of `w` is zero.
+#[inline(always)]
+fn has_zero(w: u64) -> bool {
+    w.wrapping_sub(ONES) & !w & HIGH != 0
+}
+
+/// Returns true if any byte is non-ASCII, a control byte, a quote, or a backslash.
+#[inline(always)]
+fn swar_special(w: u64) -> bool {
+    let ctrl = w.wrapping_sub(ONES * 0x20) & !w & HIGH;
+    (ctrl | (w & HIGH)) != 0
+        || has_zero(w ^ (ONES * b'"' as u64))
+        || has_zero(w ^ (ONES * b'\\' as u64))
+}
+
+/// Copies the leading ASCII run that needs no escaping and returns its length.
+///
+/// The return value is a resume offset for the general path. A special byte may
+/// cause the SWAR loop to recheck its containing word, but no earlier data.
+///
+/// # Safety
+///
+/// `src` must be readable and `dst` writable for `len` bytes.
+#[inline(always)]
+unsafe fn escape_prefix(src: *const u8, len: usize, dst: *mut u8) -> usize {
+    let mut i = 0usize;
+    while i + 8 <= len {
+        let w = (src.add(i) as *const u64).read_unaligned();
+        // The fallback overwrites this word when it contains a special byte.
+        (dst.add(i) as *mut u64).write_unaligned(w);
+        if swar_special(w) {
+            break;
+        }
+        i += 8;
+    }
+    while i < len {
+        let b = *src.add(i);
+        if b >= 0x80 || NEEDS_ESCAPE[b as usize] {
+            return i;
+        }
+        *dst.add(i) = b;
+        i += 1;
+    }
+    i
+}
+
+// ---------------------------------------------------------------------------
 // UTF-8 validation helpers
 // ---------------------------------------------------------------------------
 
@@ -128,16 +184,28 @@ unsafe fn validate_utf8_seq(src: *const u8, pos: usize, len: usize) -> Result<us
 ///
 /// `bytes` must already be valid UTF-8; this function only escapes JSON
 /// special characters, it does not validate.
+#[inline]
 pub(crate) fn escape_to_vec(bytes: &[u8], buf: &mut Vec<u8>) {
-    if bytes.is_empty() {
+    let len = bytes.len();
+    if len == 0 {
         return;
     }
-    buf.reserve(bytes.len() * 6 + 32);
+    buf.reserve(len * 6 + 32);
+    let base = buf.len();
     let written = unsafe {
-        let dst = buf.spare_capacity_mut().as_mut_ptr() as *mut u8;
-        escape_dispatch(bytes.as_ptr(), bytes.len(), dst)
+        let dst = buf.as_mut_ptr().add(base);
+        let done = if len < SHORT_STRING {
+            escape_prefix(bytes.as_ptr(), len, dst)
+        } else {
+            0
+        };
+        if done == len {
+            done
+        } else {
+            done + escape_dispatch(bytes.as_ptr().add(done), len - done, dst.add(done))
+        }
     };
-    unsafe { buf.set_len(buf.len() + written) };
+    unsafe { buf.set_len(base + written) };
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -221,8 +289,13 @@ unsafe fn escape_avx2(src: *const u8, len: usize, dst: *mut u8) -> usize {
         }
     }
 
-    // SSE2 handles the <32-byte tail (one 16-byte chunk + scalar).
-    out_pos + escape_sse2(src.add(in_pos), len - in_pos, dst.add(out_pos))
+    // Handle the short tail before falling back to SSE2.
+    let tail = len - in_pos;
+    let done = escape_prefix(src.add(in_pos), tail, dst.add(out_pos));
+    if done == tail {
+        return out_pos + done;
+    }
+    out_pos + done + escape_sse2(src.add(in_pos + done), tail - done, dst.add(out_pos + done))
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -322,18 +395,32 @@ unsafe fn escape_dispatch(src: *const u8, len: usize, dst: *mut u8) -> usize {
 // Fused UTF-8 validation + escape (for binary strings)
 // ===========================================================================
 
-/// Validate UTF-8 and escape JSON special characters in a single pass.
-/// Returns `Err(())` if `bytes` is not valid UTF-8.
-pub(crate) fn validate_and_escape_to_vec(bytes: &[u8], buf: &mut Vec<u8>) -> Result<(), ()> {
-    if bytes.is_empty() {
-        return Ok(());
+/// Appends `bytes` as a quoted, escaped JSON string.
+///
+/// Returns `Err(())` for invalid UTF-8. Capacity for the maximum expansion is
+/// reserved before writing through the vector's spare capacity.
+#[inline]
+pub(crate) fn write_json_string(bytes: &[u8], buf: &mut Vec<u8>) -> Result<(), ()> {
+    let len = bytes.len();
+    buf.reserve(len * 6 + 34);
+    let base = buf.len();
+    unsafe {
+        let dst = buf.as_mut_ptr().add(base);
+        *dst = b'"';
+        let body = dst.add(1);
+        let done = if len < SHORT_STRING {
+            escape_prefix(bytes.as_ptr(), len, body)
+        } else {
+            0
+        };
+        let written = if done == len {
+            done
+        } else {
+            done + validate_escape_dispatch(bytes.as_ptr().add(done), len - done, body.add(done))?
+        };
+        *body.add(written) = b'"';
+        buf.set_len(base + written + 2);
     }
-    buf.reserve(bytes.len() * 6 + 32);
-    let written = unsafe {
-        let dst = buf.spare_capacity_mut().as_mut_ptr() as *mut u8;
-        validate_escape_dispatch(bytes.as_ptr(), bytes.len(), dst)?
-    };
-    unsafe { buf.set_len(buf.len() + written) };
     Ok(())
 }
 
@@ -485,8 +572,15 @@ unsafe fn validate_escape_avx2(src: *const u8, len: usize, dst: *mut u8) -> Resu
         }
     }
 
-    // SSE2 handles the <32-byte tail (one 16-byte chunk + scalar).
-    Ok(out_pos + validate_escape_sse2(src.add(in_pos), len - in_pos, dst.add(out_pos))?)
+    // Handle the short tail before falling back to SSE2.
+    let tail = len - in_pos;
+    let done = escape_prefix(src.add(in_pos), tail, dst.add(out_pos));
+    if done == tail {
+        return Ok(out_pos + done);
+    }
+    Ok(out_pos
+        + done
+        + validate_escape_sse2(src.add(in_pos + done), tail - done, dst.add(out_pos + done))?)
 }
 
 // ---------------------------------------------------------------------------
@@ -634,5 +728,128 @@ unsafe fn validate_escape_dispatch(src: *const u8, len: usize, dst: *mut u8) -> 
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         validate_escape_scalar(src, len, dst)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Scalar reference implementation for `escape_prefix`.
+    fn first_special(bytes: &[u8]) -> usize {
+        bytes
+            .iter()
+            .position(|&b| b >= 0x80 || NEEDS_ESCAPE[b as usize])
+            .unwrap_or(bytes.len())
+    }
+
+    fn prefix_of(bytes: &[u8]) -> (usize, Vec<u8>) {
+        let mut dst = vec![0xAAu8; bytes.len() + 8];
+        let n = unsafe { escape_prefix(bytes.as_ptr(), bytes.len(), dst.as_mut_ptr()) };
+        (n, dst)
+    }
+
+    #[test]
+    fn the_prefix_ends_at_the_first_byte_it_cannot_take() {
+        for len in 0..80usize {
+            for pos in 0..=len {
+                for special in [b'"', b'\\', 0x01, b'\n', 0x80, 0xC3, 0xFF] {
+                    let mut input = vec![b'a'; len];
+                    if pos < len {
+                        input[pos] = special;
+                    }
+                    let (n, dst) = prefix_of(&input);
+                    assert_eq!(
+                        n,
+                        first_special(&input),
+                        "len {len} special {special:#04x} at {pos}"
+                    );
+                    assert_eq!(&dst[..n], &input[..n], "prefix bytes differ at len {len}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_clean_input_is_taken_whole() {
+        for len in 0..80usize {
+            let input = vec![b'a'; len];
+            let (n, dst) = prefix_of(&input);
+            assert_eq!(n, len, "clean input of {len} bytes was cut short");
+            assert_eq!(&dst[..n], &input[..]);
+        }
+    }
+
+    #[test]
+    fn a_leading_special_yields_an_empty_prefix() {
+        for special in [b'"', b'\\', 0x00, 0x1f, 0x80, 0xFF] {
+            let mut input = vec![b'a'; 40];
+            input[0] = special;
+            assert_eq!(prefix_of(&input).0, 0, "special {special:#04x}");
+        }
+    }
+
+    #[test]
+    fn quoted_output_matches_the_escape_table_at_every_handoff() {
+        for len in 0..80usize {
+            for pos in 0..=len {
+                for special in [b'"', b'\\', 0x01, b'\n', b'\t'] {
+                    let mut input = vec![b'a'; len];
+                    if pos < len {
+                        input[pos] = special;
+                    }
+                    let mut want = vec![b'"'];
+                    for &b in &input {
+                        let (n, esc) = QUOTE_TAB[b as usize];
+                        want.extend_from_slice(&esc[..n as usize]);
+                    }
+                    want.push(b'"');
+
+                    let mut got = Vec::new();
+                    write_json_string(&input, &mut got).expect("ascii input is valid utf8");
+                    assert_eq!(got, want, "len {len} special {special:#04x} at {pos}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multibyte_sequences_survive_every_boundary() {
+        for pad in 0..40usize {
+            for seq in ["é".as_bytes(), "✨".as_bytes(), "🚀".as_bytes()] {
+                let mut input = vec![b'a'; pad];
+                input.extend_from_slice(seq);
+                input.extend_from_slice(&[b'b'; 3]);
+
+                let mut got = Vec::new();
+                write_json_string(&input, &mut got).expect("valid utf8");
+
+                let mut want = vec![b'"'];
+                want.extend_from_slice(&input);
+                want.push(b'"');
+                assert_eq!(got, want, "pad {pad} seq {seq:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_is_rejected_after_any_clean_prefix() {
+        for pad in 0..40usize {
+            for bad in [
+                &[0xFFu8][..],
+                &[0xC3, 0x28],
+                &[0xE2, 0x28, 0xA1],
+                &[0xED, 0xA0, 0x80],
+                &[0xC3],
+            ] {
+                let mut input = vec![b'a'; pad];
+                input.extend_from_slice(bad);
+                let mut got = Vec::new();
+                assert!(
+                    write_json_string(&input, &mut got).is_err(),
+                    "accepted {bad:?} after {pad} clean bytes"
+                );
+            }
+        }
     }
 }

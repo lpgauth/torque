@@ -72,6 +72,24 @@ defmodule Torque.DecodeTest do
       assert {:ok, 9_223_372_036_854_775_808} = Torque.decode("9223372036854775808")
     end
 
+    test "every decoding strategy keeps the sign of a negative zero" do
+      # sonic-number loses the sign; every conversion path must restore it.
+      json = ~s({"z":-0.0})
+      neg = <<-0.0::float-64>>
+
+      assert <<Torque.decode!(json)["z"]::float-64>> == neg
+
+      {:ok, doc} = Torque.parse(json)
+      assert {:ok, got} = Torque.get(doc, "/z")
+      assert <<got::float-64>> == neg
+
+      ptrs = Torque.compile_pointers(["/z"])
+      assert [from_doc] = Torque.get_many_nil(doc, ptrs)
+      assert <<from_doc::float-64>> == neg
+      assert {:ok, [fused]} = Torque.parse_get_many_nil(json, ptrs)
+      assert <<fused::float-64>> == neg
+    end
+
     test "duplicate keys - last value wins" do
       assert {:ok, %{"a" => 2}} = Torque.decode(~s({"a":1,"a":2}))
     end
@@ -82,6 +100,28 @@ defmodule Torque.DecodeTest do
 
     test "duplicate keys with different value types" do
       assert {:ok, %{"k" => "str"}} = Torque.decode(~s({"k":1,"k":true,"k":"str"}))
+    end
+
+    # Above 32 members ERTS builds a hash map. Before erlang/otp#10976,
+    # enif_make_map_from_arrays reported success for duplicate keys there and
+    # returned an invalid map, so both conversion paths check the map size and
+    # rebuild by insertion. Pattern-matching against a VM-built map catches a
+    # wrong representation that equality alone would miss.
+    test "duplicate keys in a hashmap-sized object still give the Erlang map" do
+      pairs = for i <- 1..40, do: {"k#{String.pad_leading(Integer.to_string(i), 2, "0")}", i}
+      dup = pairs ++ [{"k01", 999}, {"k40", 998}]
+      json = "{" <> Enum.map_join(dup, ",", fn {k, v} -> ~s("#{k}":#{v}) end) <> "}"
+      expected = Map.new(dup)
+
+      decoded = Torque.decode!(json)
+      assert decoded == expected
+      assert map_size(decoded) == 40
+      assert ^expected = decoded
+
+      {:ok, doc} = Torque.parse(json)
+      assert {:ok, got} = Torque.get(doc, "")
+      assert got == expected
+      assert ^expected = got
     end
 
     test "invalid json returns error" do

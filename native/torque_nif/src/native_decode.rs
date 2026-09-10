@@ -10,8 +10,8 @@
 //! result. After a successful parse the stack holds exactly the root term.
 
 use rustler::sys::{
-    enif_make_double, enif_make_int64, enif_make_list_from_array, enif_make_map_from_arrays,
-    enif_make_map_put, enif_make_new_map, enif_make_sub_binary, enif_make_uint64, ERL_NIF_TERM,
+    enif_make_double, enif_make_int64, enif_make_list_from_array, enif_make_map_put,
+    enif_make_new_map, enif_make_sub_binary, enif_make_uint64, ERL_NIF_TERM,
 };
 use rustler::{Encoder, Env, NewBinary, Term};
 use sonic_rs::JsonVisitor;
@@ -20,7 +20,7 @@ use std::mem::MaybeUninit;
 
 use crate::atoms;
 use crate::decoder::parse_error_term;
-use crate::nif_util::make_tuple2;
+use crate::nif_util::{make_tuple2, map_from_arrays};
 use crate::types::MAX_DEPTH;
 
 const STACK_SIZE: usize = 64;
@@ -127,6 +127,18 @@ struct InputRef {
     len: usize,
 }
 
+impl InputRef {
+    /// Offset of `s` when its entire span lies inside the input. Integer
+    /// arithmetic on purpose: `s` may point into the parser's scratch buffer,
+    /// a different allocation, where `offset_from` would be undefined.
+    #[inline]
+    fn offset_within(&self, s: &str) -> Option<usize> {
+        let offset = (s.as_ptr() as usize).checked_sub(self.base as usize)?;
+        let room = self.len.checked_sub(offset)?;
+        (s.len() <= room).then_some(offset)
+    }
+}
+
 struct TermBuilder<'a, 'b> {
     env: Env<'a>,
     input: InputRef,
@@ -149,15 +161,10 @@ impl<'a, 'b> TermBuilder<'a, 'b> {
     /// (escaped strings are unescaped into the parser's scratch buffer).
     #[inline]
     fn str_term(&self, s: &str) -> ERL_NIF_TERM {
-        let ptr = s.as_ptr();
-        if ptr >= self.input.base {
-            let offset = unsafe { ptr.offset_from(self.input.base) } as usize;
-            let len = s.len();
-            if offset + len <= self.input.len {
-                return unsafe {
-                    enif_make_sub_binary(self.env.as_c_arg(), self.input.term, offset, len)
-                };
-            }
+        if let Some(offset) = self.input.offset_within(s) {
+            return unsafe {
+                enif_make_sub_binary(self.env.as_c_arg(), self.input.term, offset, s.len())
+            };
         }
         let mut binary = NewBinary::new(self.env, s.len());
         binary.as_mut_slice().copy_from_slice(s.as_bytes());
@@ -177,16 +184,12 @@ impl<'a, 'b> TermBuilder<'a, 'b> {
     fn key_term(&mut self, s: &str) -> ERL_NIF_TERM {
         let ptr = s.as_ptr();
         let len = s.len();
-        if self.keys.debit > KEY_CACHE_BYPASS_AT
-            || len == 0
-            || len > KEY_CACHE_MAX_LEN
-            || ptr < self.input.base
-        {
+        if self.keys.debit > KEY_CACHE_BYPASS_AT || len == 0 || len > KEY_CACHE_MAX_LEN {
             return self.str_term(s);
         }
-        let offset = unsafe { ptr.offset_from(self.input.base) } as usize;
-        if offset + len.max(8) > self.input.len {
-            return self.str_term(s);
+        match self.input.offset_within(s) {
+            Some(offset) if self.input.len - offset >= 8 => {}
+            _ => return self.str_term(s),
         }
         let mut prefix = unsafe { (ptr as *const u64).read_unaligned() };
         if len < 8 {
@@ -257,14 +260,7 @@ fn build_map(env: Env, kv: &[ERL_NIF_TERM]) -> ERL_NIF_TERM {
 fn make_map(env: Env, keys: &[ERL_NIF_TERM], vals: &[ERL_NIF_TERM]) -> ERL_NIF_TERM {
     unsafe {
         let mut map: ERL_NIF_TERM = 0;
-        if enif_make_map_from_arrays(
-            env.as_c_arg(),
-            keys.as_ptr(),
-            vals.as_ptr(),
-            keys.len(),
-            &mut map,
-        ) != 0
-        {
+        if map_from_arrays(env, keys.as_ptr(), vals.as_ptr(), keys.len(), &mut map) {
             map
         } else {
             // Duplicate keys: last value wins (matches value_to_term).
@@ -506,7 +502,7 @@ pub fn decode_to_term<'a>(env: Env<'a>, input_term: ERL_NIF_TERM, bytes: &[u8]) 
                         atoms::nesting_too_deep().as_c_arg(),
                     )
                 } else {
-                    parse_error_term(env, format!("{}", e))
+                    parse_error_term(env, &e)
                 }
             }
         };

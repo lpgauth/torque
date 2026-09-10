@@ -1,12 +1,10 @@
-use rustler::sys::{
-    enif_make_list_from_array, enif_make_map_from_arrays, enif_make_map_put, enif_make_new_map,
-    ERL_NIF_TERM,
-};
+use rustler::sys::{enif_make_list_from_array, enif_make_map_put, enif_make_new_map, ERL_NIF_TERM};
 use rustler::{Env, NewBinary, Term};
 use sonic_rs::{JsonContainerTrait, JsonType, JsonValueTrait};
 use std::mem::MaybeUninit;
 
 use crate::atoms;
+use crate::nif_util::map_from_arrays;
 
 const STACK_SIZE: usize = 64;
 
@@ -117,14 +115,13 @@ pub fn value_to_term<'a>(
                 }
                 let mut map: ERL_NIF_TERM = 0;
                 unsafe {
-                    if enif_make_map_from_arrays(
-                        env.as_c_arg(),
+                    if map_from_arrays(
+                        env,
                         keys.as_ptr() as *const ERL_NIF_TERM,
                         vals.as_ptr() as *const ERL_NIF_TERM,
                         count,
                         &mut map,
-                    ) != 0
-                    {
+                    ) {
                         Some(Term::new(env, map))
                     } else {
                         build_map_dedup(env, obj, child_depth, nodes)
@@ -139,14 +136,7 @@ pub fn value_to_term<'a>(
                 }
                 let mut map: ERL_NIF_TERM = 0;
                 unsafe {
-                    if enif_make_map_from_arrays(
-                        env.as_c_arg(),
-                        keys.as_ptr(),
-                        vals.as_ptr(),
-                        count,
-                        &mut map,
-                    ) != 0
-                    {
+                    if map_from_arrays(env, keys.as_ptr(), vals.as_ptr(), count, &mut map) {
                         Some(Term::new(env, map))
                     } else {
                         build_map_dedup(env, obj, child_depth, nodes)

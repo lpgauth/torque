@@ -134,6 +134,8 @@ defmodule Torque do
       are opt-in. Enable when terms are expected to produce large output
       (more than roughly 20 KB). Defaults to `false`.
 
+  Any other option raises `ArgumentError`.
+
   ## Examples
 
       iex> Torque.encode(%{id: "abc", price: 1.5})
@@ -154,7 +156,7 @@ defmodule Torque do
   end
 
   def encode(term, opts) do
-    if Keyword.get(opts, :dirty, false) do
+    if Keyword.validate!(opts, dirty: false)[:dirty] do
       Torque.Native.encode_dirty(term)
     else
       Torque.Native.encode(term)
@@ -205,13 +207,17 @@ defmodule Torque do
   end
 
   def encode_to_iodata(term, opts) do
-    if Keyword.get(opts, :dirty, false) do
-      Torque.Native.encode_iodata_dirty(term)
-    else
-      Torque.Native.encode_iodata(term)
+    dirty = Keyword.validate!(opts, dirty: false)[:dirty]
+
+    try do
+      if dirty do
+        Torque.Native.encode_iodata_dirty(term)
+      else
+        Torque.Native.encode_iodata(term)
+      end
+    catch
+      :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
     end
-  catch
-    :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
   end
 
   @doc """
@@ -246,6 +252,8 @@ defmodule Torque do
       a faster lookup path. Defaults to `false` (last-value-wins for
       duplicate keys).
 
+  Any other option raises `ArgumentError`.
+
   Automatically uses a dirty CPU scheduler for inputs larger than 20 KB.
 
   ## Examples
@@ -271,18 +279,25 @@ defmodule Torque do
   end
 
   def parse(json, opts) when is_binary(json) and byte_size(json) > @timeslice_bytes do
-    Torque.Native.parse_opts_dirty(json, Keyword.get(opts, :unique_keys, false))
+    Torque.Native.parse_opts_dirty(json, unique_keys!(opts))
   end
 
   def parse(json, opts) when is_binary(json) do
-    Torque.Native.parse_opts(json, Keyword.get(opts, :unique_keys, false))
+    Torque.Native.parse_opts(json, unique_keys!(opts))
   end
+
+  defp unique_keys!(opts), do: Keyword.validate!(opts, unique_keys: false)[:unique_keys]
 
   @doc """
   Extracts a value from a parsed document using a JSON Pointer path (RFC 6901).
 
   Paths must start with `"/"`. Array elements are addressed by index
   (e.g. `"/imp/0/banner/w"`). An empty path `""` returns the root value.
+
+  One deviation from RFC 6901: `"/"` also returns the root value, where the
+  RFC reads it as the member whose key is the empty string. Every pointer
+  entry point in Torque agrees on that, and changing it would silently move
+  existing callers' lookups, so it stands until a breaking release.
 
   ## Examples
 
@@ -403,7 +418,8 @@ defmodule Torque do
   Compile once at startup (e.g. into a module attribute or `:persistent_term`)
   and reuse the handle for every document.
 
-  Raises `ArgumentError` if any path is not a valid UTF-8 binary.
+  Raises `ArgumentError` if any path is not a valid UTF-8 binary or JSON Pointer.
+  A JSON Pointer is either empty or begins with `/`.
 
   ## Options
 
@@ -411,6 +427,8 @@ defmodule Torque do
       stops at the first match (faster). Defaults to `false` (reverse scan,
       last-value-wins for duplicate keys), matching `parse/2`. Safe to enable
       when keys are known to be unique.
+
+  Any other option raises `ArgumentError`.
 
   Extraction results are returned in the same order as `paths`.
 
@@ -424,7 +442,7 @@ defmodule Torque do
   @doc group: :parse_get
   @spec compile_pointers([binary()], keyword()) :: pointers()
   def compile_pointers(paths, opts \\ []) when is_list(paths) do
-    Torque.Native.compile_paths(paths, Keyword.get(opts, :unique_keys, false))
+    Torque.Native.compile_paths(paths, unique_keys!(opts))
   end
 
   @doc """
