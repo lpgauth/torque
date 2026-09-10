@@ -407,12 +407,12 @@ fn encode_float(env_raw: *mut ErlNifEnv, term: Term, buf: &mut Vec<u8>) -> Resul
     if unsafe { enif_get_double(env_raw, term.as_c_arg(), &mut n) } == 0 {
         return Err(EncodeError::UnsupportedType);
     }
-    // ryu panics on non-finite floats; JSON has no representation for them
+    // JSON has no non-finite numbers, and `format_finite` requires this check.
     if !n.is_finite() {
         return Err(EncodeError::NonFiniteFloat);
     }
-    let mut ryu_buf = ryu::Buffer::new();
-    buf.extend_from_slice(ryu_buf.format(n).as_bytes());
+    let mut fbuf = zmij::Buffer::new();
+    buf.extend_from_slice(fbuf.format_finite(n).as_bytes());
     Ok(())
 }
 

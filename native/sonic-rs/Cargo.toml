@@ -14,6 +14,8 @@
 #     repeated across sibling objects
 #   * `Object::get_last` added: reverse-scan lookup so a duplicate key resolves
 #     to its last value (0.5's object iterator is no longer double-ended)
+#   * `restore_neg_zero`: the visitor parse passes `-0.0` to `visit_f64` with
+#     its sign, which `sonic-number` drops
 # Upstream: https://github.com/cloudwego/sonic-rs (Apache-2.0)
 
 # Standalone manifest so this is not pulled into the torque workspace.

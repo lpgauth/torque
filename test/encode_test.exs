@@ -334,4 +334,44 @@ defmodule Torque.EncodeTest do
       assert function_exported?(Torque, :decode!, 1)
     end
   end
+
+  describe "float formatting" do
+    # Formatter spelling is part of the output contract and must round-trip
+    # through independent decoders.
+    @floats [
+      0.0,
+      -0.0,
+      1.0,
+      18.0,
+      3.14,
+      1.0e-7,
+      1.0e15,
+      1.0e16,
+      2.5e-11,
+      5.0e-324,
+      1.7976931348623157e308
+    ]
+
+    test "every float round-trips through Torque and through Jason" do
+      for f <- @floats do
+        {:ok, json} = Torque.encode(f)
+        assert Jason.decode!(json) === f, "Jason lost #{inspect(f)} as #{json}"
+        assert Torque.decode!(json) === f, "Torque lost #{inspect(f)} as #{json}"
+      end
+    end
+
+    test "notation boundaries and signed zero keep their spelling" do
+      assert {:ok, "0.0"} = Torque.encode(0.0)
+      assert {:ok, "-0.0"} = Torque.encode(-0.0)
+      assert {:ok, "18.0"} = Torque.encode(18.0)
+      # Pin the formatter's notation boundary and exponent sign.
+      assert {:ok, "1000000000000000.0"} = Torque.encode(1.0e15)
+      assert {:ok, "1e+16"} = Torque.encode(1.0e16)
+      assert {:ok, "1e-7"} = Torque.encode(1.0e-7)
+    end
+
+    test "floats nested in containers format the same way" do
+      assert {:ok, ~s({"a":[1e+16,-0.0]})} = Torque.encode(%{"a" => [1.0e16, -0.0]})
+    end
+  end
 end
