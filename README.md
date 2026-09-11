@@ -83,12 +83,15 @@ for faster field lookups (uses sonic-rs internal indexing instead of linear scan
 ### Compiled Pointers
 
 When the same fixed set of paths is extracted from every document, compile the
-pointers once and reuse the handle. `parse_get_many_nil/2` then fuses the parse
-and extraction into a single NIF call, skipping all per-request path parsing —
-roughly 1.5× faster end-to-end than `parse/2` + `get_many_nil/2`.
+pointers once and reuse the handle. `parse_get_many_nil/2` then reads the
+document in a single pass, building values only where a path ends and skipping
+everything else, without building an intermediate document. On a 1.2 KB bid
+request with 26 fields that is ~1.35× the previous fused parse; with 3 paths
+and `validate: false` (below) it is ~2.6×.
 
 ```elixir
-# Once, at startup (e.g. a module attribute or :persistent_term):
+# Once, at startup (e.g. into :persistent_term or application state; the
+# handle is a NIF resource, so it cannot live in a module attribute):
 pointers = Torque.compile_pointers(["/id", "/site/domain", "/imp/0/banner/w"], unique_keys: true)
 
 # Per document — parse + extract in one call:
@@ -97,6 +100,25 @@ pointers = Torque.compile_pointers(["/id", "/site/domain", "/imp/0/banner/w"], u
 
 Missing fields and JSON `null` both become `nil`. The handle also works with an
 already-parsed document via `Torque.get_many_nil(doc, pointers)`.
+
+By default a malformed document is reported wherever the fault is, as `parse/2`
+would report it, even in a region no path selects. `validate: false` skips
+unselected regions with a structural bracket scan instead of tokenizing them,
+but a malformed number, literal, or separator inside one of them goes
+unreported, and so does anything after the document, which is therefore not
+UTF-8 checked either. Truncated input, invalid UTF-8 in any byte the walk
+consumed, and errors in selected values are still rejected. Use it only with
+trusted input.
+
+It is not a free speed-up. A bracket scan over 64-byte blocks beats tokenizing
+a large subtree and loses to it on the few-byte scalars a dense path set leaves
+behind, so the win tracks how little of the document the paths select. Three
+paths out of a 2 KB request run ~3.6× faster unvalidated; 146 fields of the
+same request run ~1.2× slower. Measure your own path set.
+
+```elixir
+pointers = Torque.compile_pointers(paths, unique_keys: true, validate: false)
+```
 
 ### Encoding
 
