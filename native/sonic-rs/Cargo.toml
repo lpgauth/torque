@@ -20,6 +20,10 @@
 #     error without matching its message
 #   * `extract` module: one-pass extraction of a compiled path set that
 #     builds values only where a path ends and skips the rest
+#   * `Read` caches the pinned input's slice pointer: resolving it through the
+#     `PinnedInput` enum stopped inlining inside the skip paths
+#   * checked `skip_string` scans with `StringBlock` like `parse_string_raw`,
+#     instead of the generic 32-lane bitmask that NEON has to emulate
 # Upstream: https://github.com/cloudwego/sonic-rs (Apache-2.0)
 
 # Standalone manifest so this is not pulled into the torque workspace.

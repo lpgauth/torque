@@ -1114,33 +1114,31 @@ where
     // skip_string skips a JSON string with validation.
     #[inline(always)]
     fn skip_string(&mut self) -> Result<ParseStatus> {
-        const LANS: usize = u8x32::LANES;
-
         let mut status = ParseStatus::None;
-        while let Some(chunk) = self.read.peek_n(LANS) {
-            let v = unsafe { u8x32::from_slice_unaligned_unchecked(chunk) };
-            let v_bs = v.eq(&u8x32::splat(b'\\'));
-            let v_quote = v.eq(&u8x32::splat(b'"'));
-            let v_cc = v.le(&u8x32::splat(0x1f));
-            let mask = (v_bs | v_quote | v_cc).bitmask();
+        #[cfg(all(target_feature = "neon", target_arch = "aarch64"))]
+        let mut block: StringBlock<NeonBits>;
+        #[cfg(not(all(target_feature = "neon", target_arch = "aarch64")))]
+        let mut block: StringBlock<u32>;
 
-            // check the mask
-            if mask != 0 {
-                let cnt = mask.trailing_zeros() as usize;
-                self.read.eat(cnt + 1);
+        while let Some(chunk) = self.read.peek_n(StringBlock::LANES) {
+            let v = unsafe { load(chunk.as_ptr()) };
+            block = StringBlock::new(&v);
 
-                match chunk[cnt] {
-                    b'\\' => {
-                        self.skip_escaped_chars()?;
-                        status = ParseStatus::HasEscaped;
-                    }
-                    b'\"' => return Ok(status),
-                    0..=0x1f => return perr!(self, ControlCharacterWhileParsingString),
-                    _ => unreachable!(),
-                }
-            } else {
-                self.read.eat(LANS)
+            if block.has_quote_first() {
+                self.read.eat(block.quote_index() + 1);
+                return Ok(status);
             }
+            if block.has_unescaped() {
+                self.read.eat(block.unescaped_index());
+                return perr!(self, ControlCharacterWhileParsingString);
+            }
+            if block.has_backslash() {
+                self.read.eat(block.bs_index() + 1);
+                self.skip_escaped_chars()?;
+                status = ParseStatus::HasEscaped;
+                continue;
+            }
+            self.read.eat(StringBlock::LANES);
         }
 
         // found quote for remaining bytes

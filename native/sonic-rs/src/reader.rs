@@ -134,6 +134,9 @@ impl<'a> From<JsonSlice<'a>> for PinnedInput<'a> {
 pub struct Read<'a> {
     // pin the input JSON, because `slice` will reference it
     input: PinnedInput<'a>,
+    // Resolved once: `input` is never reassigned, and going through the
+    // `PinnedInput` enum on every peek/eat/at stopped inlining in the skip paths.
+    slice: NonNull<[u8]>,
     pub(crate) index: usize,
     // next invalid utf8 position, if not found, will be usize::MAX
     next_invalid_utf8: usize,
@@ -167,6 +170,7 @@ impl<'a> Read<'a> {
 
         Self {
             input,
+            slice,
             index: 0,
             next_invalid_utf8,
         }
@@ -174,7 +178,7 @@ impl<'a> Read<'a> {
 
     #[inline(always)]
     fn slice(&self) -> &'a [u8] {
-        unsafe { self.input.as_ptr().as_ref() }
+        unsafe { self.slice.as_ref() }
     }
 }
 
