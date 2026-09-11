@@ -32,6 +32,10 @@ defmodule Torque do
   binary, or integer keys), lists, binaries, numbers, booleans, `nil`,
   and jiffy-style `{proplist}` tuples.
 
+  Structs are rejected with `{:error, :unhandled_struct}` unless they
+  implement `Torque.Encoder` (see the protocol docs for deriving with
+  `:only` / `:except`).
+
   ## Scheduler awareness
 
   Decoding and parsing automatically dispatch inputs larger than 20 KB to a
@@ -58,6 +62,13 @@ defmodule Torque do
   """
 
   @timeslice_bytes 20_480
+
+  # Bounds protocol expansion, mirroring the NIF's own MAX_DEPTH
+  # (native/torque_nif/src/types.rs). Only struct expansions decrement it, so
+  # ordinary nesting still reaches the NIF, which owns the `:nesting_too_deep`
+  # verdict. Without a bound, an implementation returning the struct itself —
+  # or any term containing it — expands forever.
+  @max_expansion_depth 128
 
   @typedoc """
   An opaque handle to a set of pre-compiled JSON Pointer paths, returned by
@@ -133,6 +144,8 @@ defmodule Torque do
     * `true`, `false`, `nil` (JSON `null`)
     * Other atoms (encoded as JSON strings)
     * `{keyword_list}` tuples (jiffy-style proplist objects)
+    * Structs implementing `Torque.Encoder` (any other struct fails
+      with `{:error, :unhandled_struct}`)
 
   ## Options
 
@@ -156,18 +169,24 @@ defmodule Torque do
       {:ok, ~s({"id":"abc"})}
   """
   @doc group: :encode
-  @spec encode(term(), keyword()) :: {:ok, binary()} | {:error, binary() | :nesting_too_deep}
+  @spec encode(term(), keyword()) ::
+          {:ok, binary()}
+          | {:error, binary() | :nesting_too_deep | :unhandled_struct}
   def encode(term, opts \\ [])
 
   def encode(term, []) do
-    Torque.Native.encode(term)
+    case Torque.Native.encode(term) do
+      {:error, :unhandled_struct} -> encode_retry(term, false)
+      other -> other
+    end
   end
 
   def encode(term, opts) do
-    if Keyword.validate!(opts, dirty: false)[:dirty] do
-      Torque.Native.encode_dirty(term)
-    else
-      Torque.Native.encode(term)
+    dirty = Keyword.validate!(opts, dirty: false)[:dirty]
+
+    case encode_native(term, dirty) do
+      {:error, :unhandled_struct} -> encode_retry(term, dirty)
+      other -> other
     end
   end
 
@@ -209,22 +228,26 @@ defmodule Torque do
   def encode_to_iodata(term, opts \\ [])
 
   def encode_to_iodata(term, []) do
-    Torque.Native.encode_iodata(term)
+    encode_iodata_native(term, false)
   catch
-    :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
+    :error, :unhandled_struct ->
+      term |> normalize() |> encode_iodata_retry(false)
+
+    :error, value ->
+      raise ArgumentError, "encode error: #{inspect(value)}"
   end
 
   def encode_to_iodata(term, opts) do
     dirty = Keyword.validate!(opts, dirty: false)[:dirty]
 
     try do
-      if dirty do
-        Torque.Native.encode_iodata_dirty(term)
-      else
-        Torque.Native.encode_iodata(term)
-      end
+      encode_iodata_native(term, dirty)
     catch
-      :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
+      :error, :unhandled_struct ->
+        term |> normalize() |> encode_iodata_retry(dirty)
+
+      :error, value ->
+        raise ArgumentError, "encode error: #{inspect(value)}"
     end
   end
 
@@ -244,6 +267,104 @@ defmodule Torque do
   @doc group: :encode
   @spec encode_to_iodata!(term(), keyword()) :: binary()
   def encode_to_iodata!(term, opts \\ []), do: encode_to_iodata(term, opts)
+
+  defp encode_native(term, dirty) do
+    if dirty, do: Torque.Native.encode_dirty(term), else: Torque.Native.encode(term)
+  end
+
+  defp encode_retry(term, dirty) do
+    term |> normalize() |> encode_native(dirty)
+  end
+
+  defp encode_iodata_native(term, true), do: Torque.Native.encode_iodata_dirty(term)
+  defp encode_iodata_native(term, false), do: Torque.Native.encode_iodata(term)
+
+  # Retry path: a struct that still has no protocol implementation fails
+  # with the same ArgumentError as every other encode error.
+  defp encode_iodata_retry(term, dirty) do
+    encode_iodata_native(term, dirty)
+  catch
+    :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
+  end
+
+  defp normalize(term), do: normalize(term, @max_expansion_depth)
+
+  defp normalize(%_{} = struct, depth) do
+    # The bound lives inside this branch rather than in a clause guard: dialyzer
+    # resolves `impl_for/1` against the implementations visible in this
+    # application (only the Any fallback), so it treats the branch as dead and
+    # reports any clause guard here as unreachable.
+    if Torque.Encoder.impl_for(struct) != Torque.Encoder.Any do
+      if depth <= 0 do
+        raise ArgumentError, """
+        Torque.Encoder expansion exceeded #{@max_expansion_depth} levels for #{inspect(struct.__struct__)}.
+
+        Either the struct is nested deeper than the encoder's #{@max_expansion_depth}-level
+        limit, or its Torque.Encoder implementation returns a term that expands
+        the same struct again (returning the struct itself, or a term containing it).
+        """
+      end
+
+      normalize(Torque.Encoder.encode(struct), depth - 1)
+    else
+      struct
+    end
+  end
+
+  defp normalize(list, depth) when is_list(list), do: normalize_list(list, depth)
+  defp normalize(tuple, depth) when is_tuple(tuple), do: normalize_tuple(tuple, depth)
+  defp normalize(map, depth) when is_map(map), do: normalize_map(map, depth)
+  defp normalize(term, _depth), do: term
+
+  # The container helpers below keep the original term whenever nothing inside
+  # it changed. Struct-free subtrees are the common case in a payload that
+  # contains one struct, and rebuilding them is what makes the retry expensive:
+  # measured at roughly half to two thirds of normalize/1's total cost on
+  # map-heavy input. `===` against the value we just normalized is free when
+  # nothing changed — the BEAM compares equal pointers in constant time, so a
+  # 100k-element list costs the same 7ns as a two-key map.
+
+  defp normalize_list([head | tail] = list, depth) do
+    new_head = normalize(head, depth)
+    new_tail = normalize_list(tail, depth)
+
+    if new_head === head and new_tail === tail do
+      list
+    else
+      [new_head | new_tail]
+    end
+  end
+
+  defp normalize_list([], _depth), do: []
+
+  # Improper list tail: hand it back to normalize/2, which rejects it.
+  defp normalize_list(other, depth), do: normalize(other, depth)
+
+  defp normalize_tuple(tuple, depth) do
+    size = tuple_size(tuple)
+
+    if size == 0 do
+      tuple
+    else
+      Enum.reduce(0..(size - 1), tuple, fn index, acc ->
+        value = elem(tuple, index)
+
+        case normalize(value, depth) do
+          ^value -> acc
+          new_value -> put_elem(acc, index, new_value)
+        end
+      end)
+    end
+  end
+
+  defp normalize_map(map, depth) do
+    Enum.reduce(map, map, fn {key, value}, acc ->
+      case normalize(value, depth) do
+        ^value -> acc
+        new_value -> Map.put(acc, key, new_value)
+      end
+    end)
+  end
 
   # --- Parse + Get ---
 

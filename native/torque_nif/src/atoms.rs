@@ -13,4 +13,7 @@ rustler::atoms! {
     invalid_key,
     malformed_proplist,
     invalid_utf8,
+    unhandled_struct,
+    // struct marker key (atom `__struct__` in Elixir structs)
+    __struct__ = "__struct__",
 }
