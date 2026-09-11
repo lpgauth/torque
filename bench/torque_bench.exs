@@ -435,6 +435,12 @@ Benchee.run(
 BenchGroup.set("Extract 5 fields — 1.2 KB OpenRTB")
 IO.puts("\n=== EXTRACT 5 FIELDS BENCHMARK ===\n")
 
+# Compiled at startup in real use, like glazer's compiled jq paths above, so the
+# handles are built once here and only the per-document call is timed.
+pointers = Torque.compile_pointers(fields)
+pointers_uk = Torque.compile_pointers(fields, unique_keys: true)
+pointers_fast = Torque.compile_pointers(fields, unique_keys: true, validate: false)
+
 # End-to-end from raw JSON: each library does its full setup plus 5 extractions,
 # so the comparison is apples-to-apples — torque parse + get vs glazer decode +
 # find (it has no lazy handle, so it must fully decode first).
@@ -455,6 +461,15 @@ Benchee.run(
     "torque parse(unique_keys) + get_many" => fn ->
       {:ok, doc} = Torque.parse(sample_json, unique_keys: true)
       Torque.get_many(doc, fields)
+    end,
+    "torque parse_get_many_nil" => fn ->
+      Torque.parse_get_many_nil(sample_json, pointers)
+    end,
+    "torque parse_get_many_nil unique_keys" => fn ->
+      Torque.parse_get_many_nil(sample_json, pointers_uk)
+    end,
+    "torque parse_get_many_nil unique_keys validate: false" => fn ->
+      Torque.parse_get_many_nil(sample_json, pointers_fast)
     end
   },
   warmup: 2,

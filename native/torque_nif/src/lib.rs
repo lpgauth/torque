@@ -21,11 +21,14 @@ pub enum PathSeg {
     Num { idx: usize, key: String },
 }
 
-/// A reusable, pre-compiled set of JSON Pointer paths plus the object-key
-/// lookup strategy to use when extracting them.
+/// Reusable JSON Pointer paths and their extraction policy. `paths` serves
+/// parsed-document lookups; `plan` serves fused parse-and-extract calls.
 pub struct CompiledPaths {
     pub paths: Vec<Vec<PathSeg>>,
+    pub plan: sonic_rs::extract::ExtractPlan,
     pub unique_keys: bool,
+    /// Whether fused extraction validates syntax in unselected regions.
+    pub validate: bool,
 }
 
 #[rustler::resource_impl]

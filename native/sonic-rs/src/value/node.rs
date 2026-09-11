@@ -1153,6 +1153,36 @@ impl Value {
         }
     }
 
+    /// Source-order pairs of a parsed object, duplicates included. Rust-built
+    /// map objects return `None`.
+    #[inline]
+    pub fn as_pair_slice(&self) -> Option<&[(Value, Value)]> {
+        if self.meta.get_type() == Meta::OBJ_NODE {
+            let len = self.meta.unpack_dom_node().len as usize;
+            // SAFETY: `OBJ_NODE` stores `len` pairs owned by the live arena.
+            let pairs = unsafe { self.data.obj_pairs.as_ptr() };
+            return Some(unsafe { from_raw_parts(pairs, len) });
+        }
+        match self.as_ref2() {
+            ValueRefInner::Object(pairs) => Some(pairs),
+            ValueRefInner::EmptyObject => Some(&[]),
+            _ => None,
+        }
+    }
+
+    /// String of a parsed-document node without resolving the arena header.
+    #[inline(always)]
+    pub fn as_node_str(&self) -> Option<&str> {
+        if self.meta.get_type() == Meta::STR_NODE {
+            let len = self.meta.unpack_dom_node().len as usize;
+            // SAFETY: `dom_str` is the field a `STR_NODE` writes, and its arena
+            // outlives this borrow of the node.
+            let ptr = unsafe { self.data.dom_str.as_ptr() };
+            return Some(unsafe { str_from_raw_parts(ptr, len) });
+        }
+        self.as_str()
+    }
+
     pub(crate) fn as_value_slice(&self) -> Option<&[Value]> {
         match self.as_ref2() {
             ValueRefInner::Array(s) => Some(s),
@@ -1411,7 +1441,7 @@ impl Value {
         let slice = PaddedSliceRead::new(buffer.as_mut_slice(), json);
         let mut parser = Parser::new(slice).with_config(cfg);
         let mut vis = DocumentVisitor::new(json.len(), smut);
-        parser.parse_dom(&mut vis, None)?;
+        parser.parse_dom(&mut vis, None, 0)?;
         let idx = parser.read.index();
 
         // NOTE: root node should is the first node
@@ -1420,16 +1450,18 @@ impl Value {
         Ok(idx)
     }
 
+    /// `depth` continues the caller's nesting budget when parsing a subtree.
     #[inline(never)]
     pub(crate) fn parse_without_padding<'de, R: Reader<'de>>(
         &mut self,
         shared: &mut Shared,
         strbuf: &mut Vec<u8>,
         parser: &mut Parser<R>,
+        depth: usize,
     ) -> Result<()> {
         let remain_len = parser.read.remain();
         let mut vis = DocumentVisitor::new(remain_len, shared);
-        parser.parse_dom(&mut vis, Some(strbuf))?;
+        parser.parse_dom(&mut vis, Some(strbuf), depth)?;
         *self = unsafe { vis.root.as_ref().clone() };
         Ok(())
     }

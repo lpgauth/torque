@@ -83,12 +83,15 @@ for faster field lookups (uses sonic-rs internal indexing instead of linear scan
 ### Compiled Pointers
 
 When the same fixed set of paths is extracted from every document, compile the
-pointers once and reuse the handle. `parse_get_many_nil/2` then fuses the parse
-and extraction into a single NIF call, skipping all per-request path parsing —
-roughly 1.5× faster end-to-end than `parse/2` + `get_many_nil/2`.
+pointers once and reuse the handle. `parse_get_many_nil/2` then reads the
+document in a single pass, building values only where a path ends and skipping
+everything else, without building an intermediate document. On a 1.2 KB bid
+request with 26 fields that is ~1.35× the previous fused parse; with 3 paths
+and `validate: false` (below) it is ~2.6×.
 
 ```elixir
-# Once, at startup (e.g. a module attribute or :persistent_term):
+# Once, at startup (e.g. into :persistent_term or application state; the
+# handle is a NIF resource, so it cannot live in a module attribute):
 pointers = Torque.compile_pointers(["/id", "/site/domain", "/imp/0/banner/w"], unique_keys: true)
 
 # Per document — parse + extract in one call:
@@ -97,6 +100,25 @@ pointers = Torque.compile_pointers(["/id", "/site/domain", "/imp/0/banner/w"], u
 
 Missing fields and JSON `null` both become `nil`. The handle also works with an
 already-parsed document via `Torque.get_many_nil(doc, pointers)`.
+
+By default a malformed document is reported wherever the fault is, as `parse/2`
+would report it, even in a region no path selects. `validate: false` skips
+unselected regions with a structural bracket scan instead of tokenizing them,
+but a malformed number, literal, or separator inside one of them goes
+unreported, and so does anything after the document, which is therefore not
+UTF-8 checked either. Truncated input, invalid UTF-8 in any byte the walk
+consumed, and errors in selected values are still rejected. Use it only with
+trusted input.
+
+It is not a free speed-up. A bracket scan over 64-byte blocks beats tokenizing
+a large subtree and loses to it on the few-byte scalars a dense path set leaves
+behind, so the win tracks how little of the document the paths select. Three
+paths out of a 2 KB request run ~3.6× faster unvalidated; 146 fields of the
+same request run ~1.2× slower. Measure your own path set.
+
+```elixir
+pointers = Torque.compile_pointers(paths, unique_keys: true, validate: false)
+```
 
 ### Encoding
 
@@ -204,9 +226,14 @@ Functions return `{:error, reason}` tuples (or raise `ArgumentError` for bang/io
 
 ## Benchmarks
 
+Per-commit trends and the full cross-library comparison are published at
+[lpgauth.github.io/torque/dev/bench](https://lpgauth.github.io/torque/dev/bench/).
+
 Apple M1 Pro, OTP 29, Elixir 1.20. Both libraries are profile-guided
 optimised (PGO) builds: **Torque PGO** (via `scripts/pgo-build.sh`) and
-**Glazer PGO** (via `OPTIMIZE=1`).
+**Glazer PGO** (via `make -C deps/glazer/c_src PGO=generate`, the workload in
+`bench/glazer_pgo_workload.exs`, then `PGO=use`). Every table below comes from
+one run of `bench/torque_bench.exs`.
 
 glazer is benchmarked with UTF-8 validation enabled (`validate_utf8` on
 decode, `force_utf8` on encode — both off by default in glazer) so every
@@ -217,58 +244,58 @@ valid UTF-8.
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** | **389.0K** | **2.57 μs** | **2.46 μs** | **3.00 μs** | 1.56 KB |
-| **glazer** | 331.5K | 3.02 μs | 2.92 μs | 3.58 μs | 1.56 KB |
-| **jiffy** | 191.6K | 5.22 μs | 4.88 μs | 9.88 μs | **1.55 KB** |
-| **otp json** | 139.3K | 7.18 μs | 7.00 μs | 9.50 μs | 7.73 KB |
-| **jason** | 103.5K | 9.66 μs | 9.17 μs | 16.42 μs | 9.54 KB |
+| **torque** | **405.6K** | **2.47 μs** | **2.42 μs** | **2.79 μs** | 1.56 KB |
+| **glazer** | 336.5K | 2.97 μs | 2.79 μs | 5.13 μs | 1.56 KB |
+| **jiffy** | 204.9K | 4.88 μs | 4.58 μs | 9.21 μs | **1.55 KB** |
+| **otp json** | 136.7K | 7.31 μs | 7.17 μs | 9.63 μs | 7.73 KB |
+| **jason** | 103.5K | 9.66 μs | 9.25 μs | 12.67 μs | 9.54 KB |
 
 ### Decode (750 KB Twitter)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** | **708.8** | **1.41 ms** | **1.29 ms** | **1.81 ms** | **1.57 KB** |
-| **glazer** | 587.2 | 1.70 ms | 1.62 ms | 2.12 ms | 1.58 KB |
-| **jiffy** | 285.7 | 3.50 ms | 3.58 ms | 4.11 ms | 2.30 MB |
-| **otp json** | 205.0 | 4.88 ms | 4.96 ms | 5.58 ms | 2.48 MB |
-| **jason** | 142.5 | 7.02 ms | 7.00 ms | 7.47 ms | 3.54 MB |
+| **torque** | **719.2** | **1.39 ms** | **1.25 ms** | **1.88 ms** | **1.57 KB** |
+| **glazer** | 591.4 | 1.69 ms | 1.61 ms | 2.06 ms | 1.58 KB |
+| **jiffy** | 308.6 | 3.24 ms | 3.40 ms | 3.74 ms | 2.30 MB |
+| **otp json** | 205.0 | 4.88 ms | 4.94 ms | 5.51 ms | 2.48 MB |
+| **jason** | 135.0 | 7.41 ms | 7.42 ms | 7.74 ms | 3.54 MB |
 
 ### Encode (1.2 KB OpenRTB)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** [proplist() :: iodata()] | **1170K** | **0.85 μs** | **0.79 μs** | **0.92 μs** | **64 B** |
-| **torque** [proplist() :: binary()] | 1160K | 0.86 μs | **0.79 μs** | 0.96 μs | 88 B |
-| **otp json** [map() :: iodata()] | 1090K | 0.91 μs | 0.83 μs | 1.21 μs | 3928 B |
-| **torque** [map() :: iodata()] | 1050K | 0.95 μs | 0.88 μs | 1.04 μs | **64 B** |
-| **torque** [map() :: binary()] | 1040K | 0.96 μs | 0.88 μs | 1.04 μs | 88 B |
-| **glazer** [map() :: binary()] | 900K | 1.11 μs | 1.04 μs | 1.17 μs | **64 B** |
-| **jiffy** [proplist() :: iodata()] | 590K | 1.69 μs | 1.46 μs | 2.54 μs | 120 B |
-| **jason** [map() :: iodata()] | 580K | 1.72 μs | 1.63 μs | 2.63 μs | 3848 B |
-| **jiffy** [map() :: iodata()] | 480K | 2.08 μs | 1.88 μs | 2.42 μs | 824 B |
-| **jason** [map() :: binary()] | 380K | 2.65 μs | 2.50 μs | 4.04 μs | 3912 B |
+| **torque** [proplist() :: iodata()] | **1430K** | **0.70 μs** | **0.63 μs** | 0.75 μs | **64 B** |
+| **torque** [proplist() :: binary()] | 1420K | **0.70 μs** | **0.63 μs** | 0.79 μs | 88 B |
+| **torque** [map() :: iodata()] | 1240K | 0.81 μs | 0.75 μs | 0.88 μs | **64 B** |
+| **torque** [map() :: binary()] | 1220K | 0.82 μs | 0.75 μs | 0.96 μs | 88 B |
+| **otp json** [map() :: iodata()] | 1100K | 0.91 μs | 0.83 μs | 1.13 μs | 3928 B |
+| **glazer** [map() :: binary()] | 1000K | 1.00 μs | 0.88 μs | 2.38 μs | **64 B** |
+| **jiffy** [proplist() :: iodata()] | 660K | 1.51 μs | 1.25 μs | 2.79 μs | 120 B |
+| **jason** [map() :: iodata()] | 580K | 1.73 μs | 1.63 μs | 2.58 μs | 3848 B |
+| **jiffy** [map() :: iodata()] | 560K | 1.79 μs | 1.54 μs | 3.08 μs | 824 B |
+| **jason** [map() :: binary()] | 370K | 2.67 μs | 2.54 μs | 4.17 μs | 3912 B |
 
 ### Encode (750 KB Twitter)
 
 | Library | ips | mean | median | p99 | memory |
 |---|---|---|---|---|---|
-| **torque** [proplist() :: iodata()] | **1478.5** | **0.68 ms** | **0.66 ms** | 0.78 ms | **64 B** |
-| **torque** [proplist() :: binary()] | 1476.9 | **0.68 ms** | **0.66 ms** | **0.76 ms** | 88 B |
-| **torque** [map() :: binary()] | 1319.0 | 0.76 ms | 0.74 ms | 0.88 ms | 88 B |
-| **torque** [map() :: iodata()] | 1309.3 | 0.76 ms | 0.75 ms | 0.93 ms | **64 B** |
-| **glazer** [map() :: binary()] | 797.4 | 1.25 ms | 1.24 ms | 1.47 ms | **64 B** |
-| **jiffy** [proplist() :: iodata()] | 433.0 | 2.31 ms | 2.27 ms | 3.63 ms | 37.7 KB |
-| **jiffy** [map() :: iodata()] | 361.0 | 2.77 ms | 2.74 ms | 3.05 ms | 1.06 MB |
-| **otp json** [map() :: iodata()] | 256.9 | 3.89 ms | 4.26 ms | 5.21 ms | 5.40 MB |
-| **jason** [map() :: iodata()] | 247.1 | 4.05 ms | 3.75 ms | 6.23 ms | 4.96 MB |
-| **jason** [map() :: binary()] | 127.5 | 7.85 ms | 7.61 ms | 9.26 ms | 4.96 MB |
+| **torque** [proplist() :: iodata()] | **1631.3** | **0.61 ms** | **0.60 ms** | 0.70 ms | **64 B** |
+| **torque** [proplist() :: binary()] | 1627.9 | **0.61 ms** | 0.61 ms | **0.68 ms** | 88 B |
+| **torque** [map() :: iodata()] | 1432.7 | 0.70 ms | 0.68 ms | 0.80 ms | **64 B** |
+| **torque** [map() :: binary()] | 1425.6 | 0.70 ms | 0.69 ms | 0.83 ms | 88 B |
+| **glazer** [map() :: binary()] | 860.1 | 1.16 ms | 1.15 ms | 1.37 ms | **64 B** |
+| **jiffy** [proplist() :: iodata()] | 494.8 | 2.02 ms | 1.96 ms | 3.78 ms | 37.7 KB |
+| **jiffy** [map() :: iodata()] | 373.4 | 2.68 ms | 2.57 ms | 3.40 ms | 1.06 MB |
+| **otp json** [map() :: iodata()] | 268.2 | 3.73 ms | 3.77 ms | 4.91 ms | 5.40 MB |
+| **jason** [map() :: iodata()] | 220.7 | 4.53 ms | 4.18 ms | 6.84 ms | 4.96 MB |
+| **jason** [map() :: binary()] | 113.1 | 8.84 ms | 8.86 ms | 9.71 ms | 4.96 MB |
 
 ### Parse (1.2 KB OpenRTB)
 
 | Library | ips | mean | median | p99 |
 |---|---|---|---|---|
-| **torque** parse | **610.0K** | **1.64 μs** | **1.38 μs** | 3.00 μs |
-| **torque** parse(unique_keys) | 600.2K | 1.67 μs | **1.38 μs** | **2.88 μs** |
+| **torque** parse | **609.6K** | **1.64 μs** | **1.38 μs** | 2.92 μs |
+| **torque** parse(unique_keys) | 599.0K | 1.67 μs | **1.38 μs** | **2.88 μs** |
 
 ### Extract 5 fields from raw JSON (1.2 KB OpenRTB)
 
@@ -277,12 +304,21 @@ End-to-end cost of pulling 5 fields out of a JSON blob: `parse` + `get`
 fully decode first). This is the apples-to-apples version of "get" — torque's
 selective extraction skips materializing the whole document.
 
+`parse_get_many_nil` goes further. Given a handle compiled once at startup
+(like glazer's compiled jq paths), it walks the document a single time and
+builds a value only where a path ends, so no document is built at all.
+`validate: false` also skips validating the regions no path selects, which on
+a document this small is most of what is left.
+
 | Library | ips | mean | median | p99 |
 |---|---|---|---|---|
-| **torque** parse(unique_keys) + get_many | **498.8K** | **2.00 μs** | **1.79 μs** | 3.42 μs |
-| **torque** parse + get_many | 485.4K | 2.06 μs | **1.79 μs** | **2.46 μs** |
-| **torque** parse + get x5 | 473.1K | 2.11 μs | 1.96 μs | 3.42 μs |
-| **glazer** decode + find x5 | 303.0K | 3.30 μs | 3.25 μs | 3.71 μs |
+| **torque** parse_get_many_nil unique_keys validate: false | **1253K** | **0.80 μs** | **0.71 μs** | **0.88 μs** |
+| **torque** parse_get_many_nil unique_keys | 694.3K | 1.44 μs | 1.42 μs | 1.58 μs |
+| **torque** parse_get_many_nil | 688.1K | 1.45 μs | 1.42 μs | 1.58 μs |
+| **torque** parse(unique_keys) + get_many | 493.9K | 2.02 μs | 1.79 μs | 3.75 μs |
+| **torque** parse + get_many | 460.5K | 2.17 μs | 1.79 μs | 3.96 μs |
+| **torque** parse + get x5 | 458.7K | 2.18 μs | 1.96 μs | 4.04 μs |
+| **glazer** decode + find x5 | 316.8K | 3.16 μs | 3.08 μs | 3.54 μs |
 
 Run benchmarks locally:
 

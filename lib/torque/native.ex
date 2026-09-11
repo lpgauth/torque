@@ -42,7 +42,7 @@ defmodule Torque.Native do
   def encode_iodata(_term), do: :erlang.nif_error(:nif_not_loaded)
   def encode_iodata_dirty(_term), do: :erlang.nif_error(:nif_not_loaded)
   def get_many_nil(_doc, _paths), do: :erlang.nif_error(:nif_not_loaded)
-  def compile_paths(_paths, _unique_keys), do: :erlang.nif_error(:nif_not_loaded)
+  def compile_paths(_paths, _unique_keys, _validate), do: :erlang.nif_error(:nif_not_loaded)
   def get_many_nil_compiled(_doc, _compiled), do: :erlang.nif_error(:nif_not_loaded)
   def parse_get_many_nil(_json, _compiled), do: :erlang.nif_error(:nif_not_loaded)
   def parse_get_many_nil_dirty(_json, _compiled), do: :erlang.nif_error(:nif_not_loaded)

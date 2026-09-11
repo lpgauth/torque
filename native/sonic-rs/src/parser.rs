@@ -202,7 +202,7 @@ fn skip_container_loop(
 
 // Torque patch: cap DOM (`parse_array`/`parse_object`) recursion so deeply
 // nested input returns an error instead of overflowing the stack.
-const MAX_PARSE_DEPTH: usize = 128;
+pub(crate) const MAX_PARSE_DEPTH: usize = 128;
 
 /// A numeric token with no fraction or exponent is an integer literal; when
 /// such a token only reaches the `f64` path it overflowed i64/u64.
@@ -705,18 +705,21 @@ where
         }
     }
 
+    /// `depth` is the current nesting level. Sub-value parsers continue their
+    /// caller's budget; whole-document entry points pass zero.
     #[inline(always)]
     pub(crate) fn parse_dom<V>(
         &mut self,
         vis: &mut V,
         mut strbuf: Option<&mut Vec<u8>>,
+        depth: usize,
     ) -> Result<()>
     where
         V: JsonVisitor<'de>,
     {
         check_visit!(self, vis.visit_dom_start())?;
         let ch = self.skip_space();
-        self.dispatch_value(ch, vis, &mut strbuf, 0)?;
+        self.dispatch_value(ch, vis, &mut strbuf, depth)?;
         check_visit!(self, vis.visit_dom_end())
     }
 
@@ -1075,13 +1078,14 @@ where
         perr!(self, EofWhileParsing)
     }
 
+    // Checked skips still validate hex digits and surrogate pairs.
     fn skip_escaped_chars(&mut self) -> Result<()> {
         match self.read.peek() {
             Some(b'u') => {
-                if self.read.remain() < 6 {
-                    return perr!(self, EofWhileParsing);
-                } else {
-                    self.read.eat(5);
+                self.read.eat(1);
+                let code = self.parse_escaped_utf8()?;
+                if code > 0x10FFFF {
+                    return perr!(self, InvalidUnicodeCodePoint);
                 }
             }
             Some(c) => {
@@ -1097,36 +1101,44 @@ where
         Ok(())
     }
 
+    // Raw-number mode intentionally preserves tokens without converting them.
+    #[inline(always)]
+    fn skip_number_checked(&mut self, first: u8) -> Result<()> {
+        if self.cfg.use_rawnumber {
+            self.skip_number(first).map(|_| ())
+        } else {
+            self.parse_number(first).map(|_| ())
+        }
+    }
+
     // skip_string skips a JSON string with validation.
     #[inline(always)]
     fn skip_string(&mut self) -> Result<ParseStatus> {
-        const LANS: usize = u8x32::LANES;
-
         let mut status = ParseStatus::None;
-        while let Some(chunk) = self.read.peek_n(LANS) {
-            let v = unsafe { u8x32::from_slice_unaligned_unchecked(chunk) };
-            let v_bs = v.eq(&u8x32::splat(b'\\'));
-            let v_quote = v.eq(&u8x32::splat(b'"'));
-            let v_cc = v.le(&u8x32::splat(0x1f));
-            let mask = (v_bs | v_quote | v_cc).bitmask();
+        #[cfg(all(target_feature = "neon", target_arch = "aarch64"))]
+        let mut block: StringBlock<NeonBits>;
+        #[cfg(not(all(target_feature = "neon", target_arch = "aarch64")))]
+        let mut block: StringBlock<u32>;
 
-            // check the mask
-            if mask != 0 {
-                let cnt = mask.trailing_zeros() as usize;
-                self.read.eat(cnt + 1);
+        while let Some(chunk) = self.read.peek_n(StringBlock::LANES) {
+            let v = unsafe { load(chunk.as_ptr()) };
+            block = StringBlock::new(&v);
 
-                match chunk[cnt] {
-                    b'\\' => {
-                        self.skip_escaped_chars()?;
-                        status = ParseStatus::HasEscaped;
-                    }
-                    b'\"' => return Ok(status),
-                    0..=0x1f => return perr!(self, ControlCharacterWhileParsingString),
-                    _ => unreachable!(),
-                }
-            } else {
-                self.read.eat(LANS)
+            if block.has_quote_first() {
+                self.read.eat(block.quote_index() + 1);
+                return Ok(status);
             }
+            if block.has_unescaped() {
+                self.read.eat(block.unescaped_index());
+                return perr!(self, ControlCharacterWhileParsingString);
+            }
+            if block.has_backslash() {
+                self.read.eat(block.bs_index() + 1);
+                self.skip_escaped_chars()?;
+                status = ParseStatus::HasEscaped;
+                continue;
+            }
+            self.read.eat(StringBlock::LANES);
         }
 
         // found quote for remaining bytes
@@ -1174,8 +1186,36 @@ where
         }
     }
 
+    /// Skips one container member.
+    ///
+    /// Scalars stay in this frame. Nested containers use the recursive value
+    /// skipper after restoring the opening delimiter.
     #[inline(always)]
-    fn skip_object(&mut self) -> Result<()> {
+    fn skip_member(&mut self, depth: usize) -> Result<()> {
+        let ch = match self.skip_space() {
+            Some(ch) => ch,
+            None => return perr!(self, EofWhileParsing),
+        };
+        match ch {
+            b'{' | b'[' => {
+                self.read.backward(1);
+                self.skip_one_value_at(true, depth)?;
+                Ok(())
+            }
+            c @ b'-' | c @ b'0'..=b'9' => self.skip_number_checked(c),
+            b'"' => self.skip_string().map(|_| ()),
+            b't' => self.parse_literal("rue"),
+            b'f' => self.parse_literal("alse"),
+            b'n' => self.parse_literal("ull"),
+            _ => perr!(self, InvalidJsonValue),
+        }
+    }
+
+    #[inline(always)]
+    fn skip_object(&mut self, depth: usize) -> Result<()> {
+        if depth >= MAX_PARSE_DEPTH {
+            return perr!(self, RecursionLimitExceeded);
+        }
         match self.skip_space() {
             Some(b'}') => return Ok(()),
             Some(b'"') => {}
@@ -1186,7 +1226,7 @@ where
         loop {
             self.skip_string()?;
             self.parse_object_clo()?;
-            self.skip_one(true)?;
+            self.skip_member(depth + 1)?;
 
             match self.skip_space() {
                 Some(b'}') => return Ok(()),
@@ -1201,7 +1241,10 @@ where
     }
 
     #[inline(always)]
-    fn skip_array(&mut self) -> Result<()> {
+    fn skip_array(&mut self, depth: usize) -> Result<()> {
+        if depth >= MAX_PARSE_DEPTH {
+            return perr!(self, RecursionLimitExceeded);
+        }
         match self.skip_space_peek() {
             Some(b']') => {
                 self.read.eat(1);
@@ -1212,7 +1255,7 @@ where
         }
 
         loop {
-            self.skip_one(true)?;
+            self.skip_member(depth + 1)?;
             match self.skip_space() {
                 Some(b']') => return Ok(()),
                 Some(b',') => continue,
@@ -1222,9 +1265,10 @@ where
         }
     }
 
-    /// skip_container skip a object or array, and retu
+    /// Scans through the matching closing delimiter from any position inside a
+    /// container. Exposed so the extractor can discard an unneeded remainder.
     #[inline(always)]
-    fn skip_container(&mut self, left: u8, right: u8) -> Result<()> {
+    pub(crate) fn skip_container(&mut self, left: u8, right: u8) -> Result<()> {
         let mut prev_instring = 0;
         let mut prev_escaped = 0;
         let mut rbrace_num = 0;
@@ -1502,6 +1546,19 @@ where
     }
 
     pub fn skip_one(&mut self, checked: bool) -> Result<(&'de [u8], ParseStatus)> {
+        self.skip_one_at(checked, 0)
+    }
+
+    /// Skips one value from `depth`, returning its start offset and parse status.
+    ///
+    /// Validated container skipping enforces [`MAX_PARSE_DEPTH`]. Returning an
+    /// offset lets callers avoid constructing a slice when they only need to
+    /// validate or advance the reader.
+    pub(crate) fn skip_one_value_at(
+        &mut self,
+        checked: bool,
+        depth: usize,
+    ) -> Result<(usize, ParseStatus)> {
         let ch = match self.skip_space() {
             Some(ch) => ch,
             None => return perr!(self, EofWhileParsing),
@@ -1511,7 +1568,7 @@ where
         match ch {
             c @ b'-' | c @ b'0'..=b'9' => {
                 if checked {
-                    self.skip_number(c)?;
+                    self.skip_number_checked(c)?;
                 } else {
                     self.skip_number_unsafe()?;
                 }
@@ -1527,14 +1584,14 @@ where
             }
             b'{' => {
                 if checked {
-                    self.skip_object()
+                    self.skip_object(depth)
                 } else {
                     self.skip_container(b'{', b'}')
                 }
             }
             b'[' => {
                 if checked {
-                    self.skip_array()
+                    self.skip_array(depth)
                 } else {
                     self.skip_container(b'[', b']')
                 }
@@ -1544,6 +1601,16 @@ where
             b'n' => self.parse_literal("ull"),
             _ => perr!(self, InvalidJsonValue),
         }?;
+        Ok((start, status))
+    }
+
+    /// Skips one value and returns its bytes.
+    pub(crate) fn skip_one_at(
+        &mut self,
+        checked: bool,
+        depth: usize,
+    ) -> Result<(&'de [u8], ParseStatus)> {
+        let (start, status) = self.skip_one_value_at(checked, depth)?;
         let slice = self.read.slice_unchecked(start, self.read.index());
         Ok((slice, status))
     }

@@ -399,8 +399,9 @@ impl<'de, R: Reader<'de>> Deserializer<R> {
                 &mut *(ptr as *mut _)
             };
             // deserialize some json parts into `Value`, not use padding buffer, avoid the memory
-            // copy
-            val.parse_without_padding(shared, &mut self.scratch, &mut self.parser)?
+            // copy. The serde parser tracks no nesting level of its own, so this
+            // sub-value starts a fresh budget, as it always has.
+            val.parse_without_padding(shared, &mut self.scratch, &mut self.parser, 0)?
         };
 
         let val = ManuallyDrop::new(val);

@@ -3,8 +3,10 @@ use crate::native_decode;
 use crate::nif_util::{make_tuple2, timeslice_percent, REDUCTION_COUNT};
 use crate::types::{value_to_term, MAX_DEPTH};
 use crate::ParsedDocument;
-use rustler::sys::{enif_make_list_from_array, ERL_NIF_TERM};
-use rustler::{schedule, Binary, Encoder, Env, ListIterator, NifResult, ResourceArc, Term};
+use rustler::sys::{enif_make_list_from_array, enif_make_sub_binary, ERL_NIF_TERM};
+use rustler::{
+    schedule, Binary, Encoder, Env, ListIterator, NewBinary, NifResult, ResourceArc, Term,
+};
 use sonic_rs::{JsonContainerTrait, JsonValueTrait};
 
 const GET_MANY_STACK: usize = 64;
@@ -416,19 +418,38 @@ fn compile_paths<'a>(
     env: Env<'a>,
     paths: ListIterator<'a>,
     unique_keys: bool,
+    validate: bool,
 ) -> NifResult<Term<'a>> {
     let mut out = Vec::new();
+    let mut plan = sonic_rs::extract::ExtractPlan::new();
     for pt in paths {
         // Non-binary (or non-UTF-8) entries are caller bugs: badarg. Silently
         // compiling them (e.g. as "") would return the whole document.
         let p: &str = pt.decode()?;
-        out.push(compile_one(p)?);
+        let segs = compile_one(p)?;
+        // The plan borrows segments and copies only new keys.
+        plan.add_path(plan_segs(&segs));
+        out.push(segs);
     }
+    plan.finish();
     Ok(ResourceArc::new(CompiledPaths {
         paths: out,
+        plan,
         unique_keys,
+        validate,
     })
     .encode(env))
+}
+
+/// Borrows compiled path segments for plan construction.
+fn plan_segs(
+    segs: &[PathSeg],
+) -> impl ExactSizeIterator<Item = sonic_rs::extract::Seg<'_>> + use<'_> {
+    use sonic_rs::extract::Seg;
+    segs.iter().map(|s| match s {
+        PathSeg::Key(k) => Seg::Key(k),
+        PathSeg::Num { idx, key } => Seg::Index { idx: *idx, key },
+    })
 }
 
 /// Extract all compiled paths from an already-traversed `value` into a result
@@ -454,17 +475,122 @@ fn extract_compiled<'a>(
     acc.into_list(env)
 }
 
+/// Builds a string term, borrowing from `input` when requested and safe.
+#[inline]
+fn extracted_str_term(
+    env: Env,
+    input_term: ERL_NIF_TERM,
+    input: &[u8],
+    s: &str,
+    borrow: bool,
+) -> ERL_NIF_TERM {
+    if borrow {
+        if let Some(offset) = (s.as_ptr() as usize).checked_sub(input.as_ptr() as usize) {
+            if let Some(room) = input.len().checked_sub(offset) {
+                if s.len() <= room {
+                    return unsafe {
+                        enif_make_sub_binary(env.as_c_arg(), input_term, offset, s.len())
+                    };
+                }
+            }
+        }
+    }
+    let mut binary = NewBinary::new(env, s.len());
+    binary.as_mut_slice().copy_from_slice(s.as_bytes());
+    let term: Term = binary.into();
+    term.as_c_arg()
+}
+
+/// Inputs at or under this are borrowed from whatever is taken out of them.
+/// A binary this size is a single allocation whose cost is about what the refc
+/// bookkeeping for one extracted string is, so refusing to pin it buys nothing
+/// and costs a copy. The request-shaped documents this path is tuned on - a
+/// 1.9 KB OpenRTB bid request - sit well inside it.
+const BORROW_ANY_INPUT: usize = 4096;
+
+/// Otherwise, extracted strings must cover this fraction of the input.
+const BORROW_INPUT_FRACTION: usize = 4;
+
+/// Whether extracted strings should point into the caller's binary.
+///
+/// A sub-binary keeps the whole input alive for as long as any string cut from
+/// it survives. That is the trade `decode/1` makes and worth making there,
+/// since a decoded document holds most of its input anyway. One-shot
+/// extraction is the opposite shape - it exists to answer a few paths and drop
+/// the document - and a 100-byte user agent taken from a 400 KB feed pinned
+/// all 400 KB of it, which `process_info(:binary)` reports and a bidder
+/// running a million of these a second pays for.
+///
+/// ERTS copies a slice of 64 bytes or less onto the process heap, so only
+/// longer strings can pin anything at all; what is left is a per-call
+/// question, answered once for the batch rather than per string so that a
+/// result list is either all borrowed or all copied.
+///
+/// `borrowed_len` is called only for an input large enough for the answer to
+/// depend on it, so the request-shaped documents this path is tuned on never
+/// walk their results twice.
+#[inline]
+fn borrow_input(input_len: usize, borrowed_len: impl FnOnce() -> usize) -> bool {
+    input_len <= BORROW_ANY_INPUT
+        || borrowed_len().saturating_mul(BORROW_INPUT_FRACTION) >= input_len
+}
+
+/// Parses once and returns the result term with the number of bytes reached.
+/// Selected values are built directly; other regions are parsed or skipped
+/// according to the compiled validation policy.
 #[inline]
 fn do_parse_get_many_nil<'a>(
     env: Env<'a>,
+    input_term: ERL_NIF_TERM,
     bytes: &[u8],
     compiled: &CompiledPaths,
     nodes: &mut usize,
 ) -> Term<'a> {
-    match sonic_rs::from_slice::<sonic_rs::Value>(bytes) {
-        Ok(value) => {
-            let list = extract_compiled(env, &value, compiled, nodes);
-            make_tuple2(env, atoms::ok().as_c_arg(), list.as_c_arg())
+    use sonic_rs::extract::{Extracted, Keys, Validate};
+
+    let validate = if compiled.validate {
+        Validate::Yes
+    } else {
+        Validate::No
+    };
+    let keys = if compiled.unique_keys {
+        Keys::Unique
+    } else {
+        Keys::Repeatable
+    };
+
+    match sonic_rs::extract::extract(bytes, &compiled.plan, validate, keys) {
+        Ok(values) => {
+            let nil_raw = atoms::nil().as_c_arg();
+            // Decided once for the batch, so a result list is either all
+            // borrowed or all copied.
+            let borrow = borrow_input(bytes.len(), || {
+                values
+                    .iter()
+                    .map(|v| match v {
+                        Some(Extracted::Str(s)) => s.len(),
+                        _ => 0,
+                    })
+                    .sum()
+            });
+            let mut acc = TermAcc::with_hint(values.len());
+            for v in values.iter() {
+                let t = match v {
+                    // A string the parser never had to unescape is still in the
+                    // caller's binary, so the term can point at it rather than
+                    // pay a copy into a `Value` and another out of it - as long
+                    // as keeping the input behind it is worth that.
+                    Some(Extracted::Str(s)) => {
+                        extracted_str_term(env, input_term, bytes, s, borrow)
+                    }
+                    Some(Extracted::Value(v)) => value_to_term(env, v, MAX_DEPTH, nodes)
+                        .map(|t| t.as_c_arg())
+                        .unwrap_or(nil_raw),
+                    None => nil_raw,
+                };
+                acc.push(t);
+            }
+            make_tuple2(env, atoms::ok().as_c_arg(), acc.into_list(env).as_c_arg())
         }
         Err(e) => parse_error_term(env, &e),
     }
@@ -473,11 +599,12 @@ fn do_parse_get_many_nil<'a>(
 #[rustler::nif]
 fn parse_get_many_nil<'a>(
     env: Env<'a>,
-    json: Binary,
+    json: Binary<'a>,
     compiled: ResourceArc<CompiledPaths>,
 ) -> Term<'a> {
     let mut nodes = 0usize;
-    let result = do_parse_get_many_nil(env, json.as_slice(), &compiled, &mut nodes);
+    let input_term = json.to_term(env).as_c_arg();
+    let result = do_parse_get_many_nil(env, input_term, json.as_slice(), &compiled, &mut nodes);
     // Timeslice fractions accumulate: bytes cover the parse, nodes the extraction.
     schedule::consume_timeslice(env, timeslice_percent(json.len()));
     consume_timeslice_nodes(env, nodes);
@@ -487,11 +614,12 @@ fn parse_get_many_nil<'a>(
 #[rustler::nif(schedule = "DirtyCpu")]
 fn parse_get_many_nil_dirty<'a>(
     env: Env<'a>,
-    json: Binary,
+    json: Binary<'a>,
     compiled: ResourceArc<CompiledPaths>,
 ) -> Term<'a> {
     let mut nodes = 0usize;
-    do_parse_get_many_nil(env, json.as_slice(), &compiled, &mut nodes)
+    let input_term = json.to_term(env).as_c_arg();
+    do_parse_get_many_nil(env, input_term, json.as_slice(), &compiled, &mut nodes)
 }
 
 #[inline]
@@ -553,4 +681,158 @@ fn get_many_nil<'a>(
 
     consume_timeslice_nodes(env, nodes);
     Ok(acc.into_list(env))
+}
+
+#[cfg(test)]
+mod extract_regressions {
+    use sonic_rs::extract::{extract, ExtractPlan, Extracted, Keys, Seg, Validate};
+    use sonic_rs::{JsonValueTrait, Value};
+
+    fn owned(value: Option<Extracted<'_>>) -> Value {
+        match value {
+            Some(Extracted::Value(value)) => value,
+            other => panic!("expected an owned value, got {other:?}"),
+        }
+    }
+
+    fn numbers(json: &str, plan: &ExtractPlan) -> Vec<Option<u64>> {
+        extract(json, plan, Validate::Yes, Keys::Repeatable)
+            .unwrap()
+            .into_iter()
+            .map(|value| value.map(|value| owned(Some(value)).as_u64().unwrap()))
+            .collect()
+    }
+
+    // These arena lifetime tests also run under Miri, including root selection,
+    // selected subtrees sharing an arena, and error unwinding after allocation.
+    #[test]
+    fn selected_container_root_outlives_extraction() {
+        let mut plan = ExtractPlan::new();
+        plan.add_path(std::iter::empty());
+        for validate in [Validate::Yes, Validate::No] {
+            let mut values = extract("[1]", &plan, validate, Keys::Repeatable).unwrap();
+            let root = owned(values.pop().unwrap());
+            let child = root.get(0).unwrap().clone();
+            let clone = root.clone();
+            drop(values);
+            drop(root);
+            assert_eq!(clone.get(0).unwrap().as_u64(), Some(1));
+            drop(clone);
+            assert_eq!(child.as_u64(), Some(1));
+        }
+    }
+
+    #[test]
+    fn selected_nested_containers_survive_independent_drops() {
+        let mut plan = ExtractPlan::new();
+        plan.add_path([Seg::Key("a")].into_iter());
+        plan.add_path([Seg::Key("a"), Seg::Index { idx: 0, key: "0" }].into_iter());
+        plan.add_path(
+            [
+                Seg::Key("a"),
+                Seg::Index { idx: 1, key: "1" },
+                Seg::Key("b"),
+            ]
+            .into_iter(),
+        );
+        plan.add_path([Seg::Key("a")].into_iter());
+        for validate in [Validate::Yes, Validate::No] {
+            let mut values = extract(
+                r#"{"a":[[1],{"b":[2]}],"other":0}"#,
+                &plan,
+                validate,
+                Keys::Repeatable,
+            )
+            .unwrap();
+            let duplicate = owned(values.pop().unwrap());
+            let nested = owned(values.pop().unwrap());
+            let first = owned(values.pop().unwrap());
+            drop(values);
+            assert_eq!(duplicate.get(0).unwrap().get(0).unwrap().as_u64(), Some(1));
+            drop(duplicate);
+            assert_eq!(nested.get(0).unwrap().as_u64(), Some(2));
+            drop(nested);
+            assert_eq!(first.get(0).unwrap().as_u64(), Some(1));
+        }
+    }
+
+    #[test]
+    fn selected_container_errors_unwind_arenas() {
+        let mut root = ExtractPlan::new();
+        root.add_path(std::iter::empty());
+        let mut nested = ExtractPlan::new();
+        nested.add_path([Seg::Key("a")].into_iter());
+        nested.add_path([Seg::Key("broken")].into_iter());
+        for validate in [Validate::Yes, Validate::No] {
+            for json in ["[1,", r#"{"a":[1],"b":[2,}"#] {
+                assert!(extract(json, &root, validate, Keys::Repeatable).is_err());
+            }
+            assert!(extract(
+                r#"{"a":[[1],{"b":[2]}],"broken":[2,}"#,
+                &nested,
+                validate,
+                Keys::Repeatable,
+            )
+            .is_err());
+        }
+        assert!(extract("[1] x", &root, Validate::Yes, Keys::Repeatable).is_err());
+    }
+
+    #[test]
+    fn numeric_plans_work_before_finish_and_after_more_paths() {
+        let width = 40;
+        let mut plan = ExtractPlan::new();
+        // A key-only edge upgraded to numeric must share both result slots.
+        plan.add_path([Seg::Key("4")].into_iter());
+        for idx in (0..width).rev() {
+            let key = idx.to_string();
+            plan.add_path([Seg::Index { idx, key: &key }].into_iter());
+        }
+        plan.add_path([Seg::Index { idx: 4, key: "4" }].into_iter());
+        let missing = usize::MAX.to_string();
+        plan.add_path(
+            [Seg::Index {
+                idx: usize::MAX,
+                key: &missing,
+            }]
+            .into_iter(),
+        );
+        let json = format!(
+            "[{}]",
+            (0..=width)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let mut expected = vec![Some(4)];
+        expected.extend((0..width as u64).rev().map(Some));
+        expected.extend([Some(4), None]);
+        assert_eq!(numbers(&json, &plan), expected);
+        plan.finish();
+        assert_eq!(numbers(&json, &plan), expected);
+
+        // Inserting below the largest existing index invalidates sorted order.
+        let key = width.to_string();
+        plan.add_path(
+            [Seg::Index {
+                idx: width,
+                key: &key,
+            }]
+            .into_iter(),
+        );
+        expected.push(Some(width as u64));
+        assert_eq!(numbers(&json, &plan), expected);
+        plan.finish();
+        assert_eq!(numbers(&json, &plan), expected);
+
+        let object = format!(
+            "{{{}}}",
+            (0..=width)
+                .map(|i| format!(r#""{i}":{}"#, i + 100))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let expected: Vec<_> = expected.into_iter().map(|n| n.map(|n| n + 100)).collect();
+        assert_eq!(numbers(&object, &plan), expected);
+    }
 }

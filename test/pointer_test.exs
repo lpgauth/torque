@@ -500,4 +500,443 @@ defmodule Torque.PointerTest do
       assert is_binary(v1) and is_binary(v600)
     end
   end
+
+  describe "parse_get_many_nil/2 path shapes" do
+    @doc_json ~s({"user":{"id":"u-7","tags":["a","b"]},"imp":[{"w":300},{"w":250}],"n":{"0":"as-key"}})
+
+    test "a path that is a prefix of another fills both" do
+      ptrs = Torque.compile_pointers(["/user", "/user/id", "/user/tags/1", "/user/missing"])
+
+      assert {:ok, [%{"id" => "u-7"}, "u-7", "b", nil]} =
+               Torque.parse_get_many_nil(@doc_json, ptrs)
+    end
+
+    test "a numeric segment picks array index or object key per node" do
+      ptrs = Torque.compile_pointers(["/imp/1/w", "/n/0", "/imp/9/w"])
+      assert {:ok, [250, "as-key", nil]} = Torque.parse_get_many_nil(@doc_json, ptrs)
+    end
+
+    test "the root path returns the whole document" do
+      ptrs = Torque.compile_pointers(["", "/user/id"])
+      assert {:ok, [doc, "u-7"]} = Torque.parse_get_many_nil(@doc_json, ptrs)
+      assert doc == Torque.decode!(@doc_json)
+    end
+
+    test "a path deeper than the nesting limit is absent, not an error" do
+      deep = "/" <> Enum.map_join(1..200, "/", &"s#{&1}")
+      ptrs = Torque.compile_pointers([deep, "/user/id"])
+      assert {:ok, [nil, "u-7"]} = Torque.parse_get_many_nil(@doc_json, ptrs)
+    end
+
+    test "unique_keys with validate: false stops at the first match" do
+      json = ~s({"a":1,"z":"skipped","a":2})
+      ptrs = Torque.compile_pointers(["/a"], unique_keys: true, validate: false)
+      assert {:ok, [1]} = Torque.parse_get_many_nil(json, ptrs)
+    end
+  end
+
+  describe "parse_get_many_nil/2 skipped regions" do
+    test "a fault outside every selected path is still reported" do
+      ptrs = Torque.compile_pointers(["/keep"])
+      assert {:error, _} = Torque.parse_get_many_nil(~s({"keep":1,"other":tru}), ptrs)
+      assert {:error, _} = Torque.parse_get_many_nil(~s({"keep":1,"other":[1,,2]}), ptrs)
+      assert {:error, _} = Torque.parse_get_many_nil(~s({"keep":1,"other":01}), ptrs)
+      assert {:error, _} = Torque.parse_get_many_nil(~s({"keep":1,"other":{"x" 1}}), ptrs)
+      assert {:error, _} = Torque.parse_get_many_nil(~s({"keep":1} trailing), ptrs)
+
+      assert {:error, _} =
+               Torque.parse_get_many_nil(<<"{\"keep\":1,\"o\":\"", 0xFF, "\"}">>, ptrs)
+    end
+
+    test "validated skipped values match full parsing" do
+      # Checked extraction must reject malformed values outside selected paths.
+      faults = [
+        ~s({"keep":1,"drop":"\\uZZZZ"}),
+        ~s({"keep":1,"drop":"\\u00zz"}),
+        ~s({"keep":1,"drop":"\\ud800"}),
+        ~s({"keep":1,"drop":"\\ud800x"}),
+        ~s({"keep":1,"drop":1e400}),
+        ~s({"keep":1,"drop":[-1e400]}),
+        ~s({"keep":1,"drop":{"n":1e400}})
+      ]
+
+      clean = [
+        ~s({"keep":1,"drop":"\\ud83d\\ude04"}),
+        ~s({"keep":1,"drop":"\\u00e9\\n\\t"}),
+        ~s({"keep":1,"drop":[1.5e-3,-0.0,18446744073709551616]})
+      ]
+
+      strict = Torque.compile_pointers(["/keep"])
+      loose = Torque.compile_pointers(["/keep"], validate: false)
+
+      for json <- faults do
+        assert {:error, _} = Torque.parse(json), json
+        assert {:error, _} = Torque.parse_get_many_nil(json, strict), json
+        assert {:ok, [1]} = Torque.parse_get_many_nil(json, loose), json
+      end
+
+      for json <- clean do
+        assert {:ok, _} = Torque.parse(json), json
+        assert {:ok, [1]} = Torque.parse_get_many_nil(json, strict), json
+        assert {:ok, [1]} = Torque.parse_get_many_nil(json, loose), json
+      end
+    end
+
+    test "validate: false answers from the selected paths alone" do
+      ptrs = Torque.compile_pointers(["/keep"], validate: false)
+      assert {:ok, [1]} = Torque.parse_get_many_nil(~s({"keep":1,"other":[1,,2]}), ptrs)
+      assert {:ok, [1]} = Torque.parse_get_many_nil(~s({"keep":1} trailing), ptrs)
+      # Selected values are still parsed under the unchecked policy.
+      assert {:error, _} = Torque.parse_get_many_nil(~s({"keep":}), ptrs)
+    end
+
+    test "validate: false accepts trailing content but not truncation" do
+      # Skipping relaxes the trailing-content check, which is the one way an
+      # unchecked extraction accepts what `decode/1` refuses. It does not
+      # relax truncation: a skip still has to find its closing delimiter, and
+      # the early exit under `unique_keys` ends in the same scan.
+      for unique <- [false, true] do
+        ptrs = Torque.compile_pointers(["/keep"], validate: false, unique_keys: unique)
+
+        assert {:ok, [1]} = Torque.parse_get_many_nil(~s({"keep":1} junk), ptrs)
+
+        for truncated <- [
+              ~s({"keep":1,"other":[1,2,),
+              ~s({"keep":1,"other":2),
+              ~s({"keep":1,"s":"unterminated)
+            ] do
+          assert {:error, _} = Torque.parse_get_many_nil(truncated, ptrs), truncated
+        end
+      end
+    end
+
+    test "validate: false and unique_keys do not change any answer" do
+      # Skipping may relax error reporting, but it must not change selected values.
+      json = ~s({"a":{"b":[10,20]},"b":["x"],"0":1,"s":"v"})
+      paths = ["/a/b/1", "/b/0", "/0", "/s", "/missing", ""]
+      {:ok, doc} = Torque.parse(json)
+      expected = Torque.get_many_nil(doc, paths)
+
+      fast = Torque.compile_pointers(paths, unique_keys: true, validate: false)
+      strict = Torque.compile_pointers(paths)
+
+      assert {:ok, expected} == Torque.parse_get_many_nil(json, strict)
+      assert {:ok, expected} == Torque.parse_get_many_nil(json, fast)
+    end
+
+    test "validate: false still reports invalid UTF-8 it walked over" do
+      # Structural skipping relaxes syntax checks, not UTF-8 validation.
+      ptrs = Torque.compile_pointers(["/keep"], validate: false)
+      bad = <<"{\"keep\":1,\"drop\":\"", 0xFF, "\"}">>
+      assert {:error, _} = Torque.parse_get_many_nil(bad, ptrs)
+    end
+
+    test "validate: false returns the same values as the default for good input" do
+      paths = ["/id", "/site/domain", "/imp/0/banner/w", "/nonexistent"]
+      strict = Torque.compile_pointers(paths)
+      loose = Torque.compile_pointers(paths, validate: false)
+
+      assert Torque.parse_get_many_nil(@sample_json, strict) ==
+               Torque.parse_get_many_nil(@sample_json, loose)
+    end
+
+    test "duplicate keys resolve the same way as a parsed document" do
+      json = ~s({"a":1,"b":{"c":1},"a":2,"b":{"c":2}})
+      paths = ["/a", "/b/c"]
+
+      {:ok, doc} = Torque.parse(json)
+      assert Torque.get_many_nil(doc, paths) == [2, 2]
+      assert {:ok, [2, 2]} = Torque.parse_get_many_nil(json, Torque.compile_pointers(paths))
+
+      uniq = Torque.compile_pointers(paths, unique_keys: true)
+      {:ok, doc} = Torque.parse(json, unique_keys: true)
+      assert Torque.get_many_nil(doc, uniq) == [1, 1]
+      assert {:ok, [1, 1]} = Torque.parse_get_many_nil(json, uniq)
+    end
+
+    test "a repeated key does not leave the previous value's fields behind" do
+      # A later duplicate must clear descendants supplied only by the old value.
+      cases = [
+        {~s({"a":{"x":1},"a":{}}), ["/a/x", "/a"], [nil, %{}]},
+        {~s({"a":{"x":1},"a":{"y":2}}), ["/a/x", "/a/y"], [nil, 2]},
+        {~s({"a":{"x":1},"a":[9]}), ["/a/x", "/a/0", "/a"], [nil, 9, [9]]},
+        {~s({"a":{"x":1},"a":5}), ["/a/x", "/a"], [nil, 5]},
+        {~s({"a":{"b":{"c":1}},"a":{"b":{}}}), ["/a/b/c"], [nil]},
+        {~s({"a":[{"k":1}],"a":[{}]}), ["/a/0/k"], [nil]}
+      ]
+
+      for {json, paths, expected} <- cases do
+        {:ok, doc} = Torque.parse(json)
+        assert Torque.get_many_nil(doc, paths) == expected
+
+        for ptrs <- [
+              Torque.compile_pointers(paths),
+              Torque.compile_pointers(paths, validate: false)
+            ] do
+          assert Torque.get_many_nil(doc, ptrs) == expected
+          assert {:ok, expected} == Torque.parse_get_many_nil(json, ptrs)
+        end
+      end
+    end
+
+    test "unique_keys keeps the first value's fields under a repeated key" do
+      json = ~s({"a":{"x":1},"a":{}})
+      paths = ["/a/x", "/a"]
+      expected = [1, %{"x" => 1}]
+
+      {:ok, doc} = Torque.parse(json, unique_keys: true)
+      ptrs = Torque.compile_pointers(paths, unique_keys: true)
+
+      assert Torque.get_many_nil(doc, ptrs) == expected
+      assert {:ok, expected} == Torque.parse_get_many_nil(json, ptrs)
+    end
+
+    # One object's tracking of which planned keys it has already supplied used
+    # to be a single word, so the 65th key at a node had no bit: `unique_keys`
+    # silently became last-wins there, and the unchecked early exit could never
+    # fire because its found-count could not reach the node's width.
+    test "duplicate keys resolve the same way at every plan width" do
+      for width <- [1, 63, 64, 65, 200] do
+        keys = for i <- 1..width, do: "k#{i}"
+        paths = Enum.map(keys, &"/#{&1}")
+        last = "k#{width}"
+
+        # Every key once, then the widest one repeated with a different value.
+        json =
+          "{" <>
+            Enum.map_join(keys, ",", fn k -> ~s("#{k}":1) end) <>
+            ~s(,"#{last}":2) <> "}"
+
+        for unique <- [false, true] do
+          {:ok, doc} = Torque.parse(json, unique_keys: unique)
+          expected = List.duplicate(1, width - 1) ++ [if(unique, do: 1, else: 2)]
+          assert Torque.get_many_nil(doc, paths) == expected
+
+          for validate <- [true, false] do
+            ptrs = Torque.compile_pointers(paths, unique_keys: unique, validate: validate)
+
+            assert Torque.get_many_nil(doc, ptrs) == expected,
+                   "width #{width}, unique_keys: #{unique}, compiled lookup"
+
+            assert {:ok, expected} == Torque.parse_get_many_nil(json, ptrs),
+                   "width #{width}, unique_keys: #{unique}, validate: #{validate}"
+          end
+        end
+      end
+    end
+
+    test "a repeated key clears descendants at every plan width" do
+      for width <- [1, 64, 65, 200] do
+        # Pad to `width` planned keys at the root so the repeated key sits past
+        # the inline word, then take a field only the dead first value supplies.
+        pad = for i <- 1..(width - 1)//1, do: ~s("p#{i}":0)
+        json = "{" <> Enum.join(pad ++ [~s("a":{"x":1}), ~s("a":{"y":2})], ",") <> "}"
+        paths = Enum.map(1..(width - 1)//1, &"/p#{&1}") ++ ["/a/x"]
+        expected = List.duplicate(0, width - 1) ++ [nil]
+
+        {:ok, doc} = Torque.parse(json)
+        assert Torque.get_many_nil(doc, paths) == expected
+
+        for validate <- [true, false] do
+          ptrs = Torque.compile_pointers(paths, validate: validate)
+
+          assert {:ok, expected} == Torque.parse_get_many_nil(json, ptrs),
+                 "width #{width}, validate: #{validate}"
+        end
+      end
+    end
+
+    test "nested replacements invalidate only their own live results across container types" do
+      json =
+        ~s({"stable":{"z":7},"a":[{"x":1,"x":2},9],) <>
+          ~s("a":{"0":{"x":3},"0":{"y":4},"tail":{"z":5}},) <>
+          ~s("a":{"0":{"x":6},"1":10},"a":{"0":{"y":12},"1":13}})
+
+      paths = ["/a/0/x", "/a/0/x", "/a/0/y", "/a/1", "/a/tail/z", "/stable/z"]
+
+      for unique <- [false, true], validate <- [true, false] do
+        expected = if unique, do: [1, 1, nil, 9, nil, 7], else: [nil, nil, 12, 13, nil, 7]
+        ptrs = Torque.compile_pointers(paths, unique_keys: unique, validate: validate)
+        assert {:ok, expected} == Torque.parse_get_many_nil(json, ptrs)
+
+        # Selecting a prefix fills descendants from its owned DOM instead of the
+        # streaming walk. Both must register live results, including aliases.
+        overlapping = paths ++ ["/a/0", "/a/0", "/a"]
+        ptrs = Torque.compile_pointers(overlapping, unique_keys: unique, validate: validate)
+        {:ok, doc} = Torque.parse(json, unique_keys: unique)
+        expected = Torque.get_many_nil(doc, ptrs)
+        assert {:ok, expected} == Torque.parse_get_many_nil(json, ptrs)
+      end
+    end
+
+    test "out-of-order numeric paths preserve duplicates and missing array indices" do
+      indices = Enum.to_list(80..0//-1) ++ [0, 40, 999_999]
+      paths = Enum.map(indices, &"/a/#{&1}")
+
+      for unique <- [false, true], validate <- [true, false] do
+        ptrs = Torque.compile_pointers(paths, unique_keys: unique, validate: validate)
+        values = Enum.to_list(0..39)
+        array = Jason.encode!(%{"a" => values})
+        expected = Enum.map(indices, &Enum.at(values, &1))
+        assert {:ok, expected} == Torque.parse_get_many_nil(array, ptrs)
+
+        object = Jason.encode!(%{"a" => Map.new(values, &{Integer.to_string(&1), &1})})
+        assert {:ok, expected} == Torque.parse_get_many_nil(object, ptrs)
+      end
+    end
+
+    test "unique_keys skips the object remainder at every plan width" do
+      for width <- [1, 64, 65, 200] do
+        keys = for i <- 1..width, do: "k#{i}"
+        paths = Enum.map(keys, &"/#{&1}")
+
+        # A member the plan walk cannot parse. Reaching the closing brace means
+        # the whole remainder was skipped once every requested key was found.
+        json =
+          "{" <> Enum.map_join(keys, ",", fn k -> ~s("#{k}":1) end) <> ~s(,"z" 5) <> "}"
+
+        ptrs = Torque.compile_pointers(paths, unique_keys: true, validate: false)
+
+        assert {:ok, List.duplicate(1, width)} == Torque.parse_get_many_nil(json, ptrs),
+               "width #{width} did not stop after the last requested key"
+      end
+    end
+
+    test "the array remainder is skipped once every index is found" do
+      # An element the plan walk cannot parse, past the last requested index.
+      # Reaching the closing bracket means the remainder was skipped rather
+      # than walked. Unlike an object this needs no uniqueness promise: an
+      # array cannot repeat an index, so nothing later can replace a result.
+      json = ~s({"a":[10,20,30 40,,]})
+      paths = ["/a/1", "/a/0"]
+
+      for unique <- [false, true] do
+        loose = Torque.compile_pointers(paths, unique_keys: unique, validate: false)
+        assert {:ok, [20, 10]} == Torque.parse_get_many_nil(json, loose)
+
+        strict = Torque.compile_pointers(paths, unique_keys: unique)
+        assert {:error, _} = Torque.parse_get_many_nil(json, strict)
+
+        # An index the array never reaches keeps the walk going, since absence
+        # is only established by reaching the end.
+        open = Torque.compile_pointers(paths ++ ["/a/9"], unique_keys: unique, validate: false)
+        assert {:error, _} = Torque.parse_get_many_nil(json, open)
+      end
+    end
+
+    test "nesting deeper than the limit is refused, not crashed" do
+      deep = String.duplicate("[", 200) <> String.duplicate("]", 200)
+      json = ~s({"keep":1,"other":) <> deep <> "}"
+      ptrs = Torque.compile_pointers(["/keep"])
+      assert {:error, :nesting_too_deep} = Torque.parse_get_many_nil(json, ptrs)
+
+      # Structural skipping is iterative and does not consume the nesting budget.
+      loose = Torque.compile_pointers(["/keep"], validate: false)
+      assert {:ok, [1]} = Torque.parse_get_many_nil(json, loose)
+    end
+
+    test "a selected value deeper than the limit is refused" do
+      deep = String.duplicate("[", 200) <> String.duplicate("]", 200)
+      json = ~s({"keep":) <> deep <> "}"
+
+      for ptrs <- [
+            Torque.compile_pointers(["/keep"]),
+            Torque.compile_pointers(["/keep"], validate: false)
+          ] do
+        assert {:error, :nesting_too_deep} = Torque.parse_get_many_nil(json, ptrs)
+      end
+    end
+
+    test "the nesting limit spans the plan and the value it selects" do
+      # Plan descent and selected-value parsing share one nesting budget.
+      path = "/" <> Enum.map_join(1..100, "/", fn _ -> "a" end)
+      strict = Torque.compile_pointers([path])
+      loose = Torque.compile_pointers([path], validate: false)
+
+      nest = fn arrays ->
+        String.duplicate(~s({"a":), 100) <>
+          String.duplicate("[", arrays) <>
+          "1" <>
+          String.duplicate("]", arrays) <> String.duplicate("}", 100)
+      end
+
+      # Pin the boundary with nesting split across the plan and selected value.
+      assert {:ok, _} = Torque.parse(nest.(28))
+      assert {:error, :nesting_too_deep} = Torque.parse(nest.(29))
+
+      for ptrs <- [strict, loose] do
+        assert {:ok, [selected]} = Torque.parse_get_many_nil(nest.(28), ptrs)
+        assert is_list(selected)
+        assert {:error, :nesting_too_deep} = Torque.parse_get_many_nil(nest.(29), ptrs)
+      end
+    end
+  end
+
+  # A string the parser never had to unescape comes back as a sub-binary of the
+  # caller's JSON rather than a copy, the way `decode/1` has always returned
+  # string values. What has to hold is that the bytes are the same ones a
+  # parsed document answers with, and that they survive the input going away.
+  describe "extracted strings" do
+    test "every way of writing a string answers what a parsed document does" do
+      json =
+        ~s({"plain":"hello","esc":"a\\nb\\"c\\\\d","uni":"caf\\u00e9",) <>
+          ~s("empty":"","tail":"at the very end"})
+
+      paths = ["/plain", "/esc", "/uni", "/empty", "/tail"]
+      {:ok, doc} = Torque.parse(json)
+      expected = ["hello", "a\nb\"c\\d", "café", "", "at the very end"]
+      assert Torque.get_many_nil(doc, paths) == expected
+
+      for ptrs <- [
+            Torque.compile_pointers(paths),
+            Torque.compile_pointers(paths, validate: false),
+            Torque.compile_pointers(paths, unique_keys: true)
+          ] do
+        assert {:ok, ^expected} = Torque.parse_get_many_nil(json, ptrs)
+      end
+    end
+
+    test "an extracted string keeps its bytes after the input is dropped" do
+      ptrs = Torque.compile_pointers(["/ua"])
+      ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0"
+
+      extracted =
+        (fn ->
+           json = :binary.copy(~s({"pad":"#{String.duplicate("x", 512)}","ua":"#{ua}"}))
+           {:ok, [v]} = Torque.parse_get_many_nil(json, ptrs)
+           v
+         end).()
+
+      :erlang.garbage_collect()
+      for _ <- 1..50, do: :binary.copy(<<0::size(8192)>>)
+      :erlang.garbage_collect()
+
+      assert extracted == ua
+    end
+
+    # Pointing a term at the input keeps the whole input alive behind it, which
+    # is the wrong trade for the one call whose purpose is to answer a few
+    # paths and drop the document: a 100-byte user agent taken from a 400 KB
+    # feed held all 400 KB. Measured in a process of its own, since
+    # `process_info(:binary)` reports what the *caller* still references and
+    # the test's own scope holds the input.
+    test "a small field taken from a large input does not keep it alive" do
+      ptrs = Torque.compile_pointers(["/ua"])
+      ua = String.duplicate("u", 100)
+      parent = self()
+
+      spawn(fn ->
+        json = ~s({"pad":"#{String.duplicate("x", 400_000)}","ua":"#{ua}"})
+        {:ok, [v]} = Torque.parse_get_many_nil(json, ptrs)
+        :erlang.garbage_collect()
+        {:binary, refs} = :erlang.process_info(self(), :binary)
+        send(parent, {v, Enum.sum(Enum.map(refs, fn {_, size, _} -> size end))})
+        # Hold until the assertions run, so nothing above can be collected.
+        receive do: (:done -> :ok)
+      end)
+
+      assert_receive {^ua, retained}
+      assert retained < 4096, "a 100-byte field kept #{retained} bytes of input alive"
+    end
+  end
 end

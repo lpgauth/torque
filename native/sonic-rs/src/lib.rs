@@ -12,6 +12,7 @@ mod pointer;
 pub mod reader;
 mod util;
 
+pub mod extract;
 pub mod format;
 pub mod lazyvalue;
 pub mod parser;
@@ -69,7 +70,7 @@ where
 {
     let mut parser = crate::parser::Parser::new(Read::from(json));
     let mut strbuf = Vec::new();
-    parser.parse_dom(visitor, Some(&mut strbuf))?;
+    parser.parse_dom(visitor, Some(&mut strbuf), 0)?;
     parser.parse_trailing()
 }
 
