@@ -226,6 +226,9 @@ Functions return `{:error, reason}` tuples (or raise `ArgumentError` for bang/io
 
 ## Benchmarks
 
+Per-commit trends and the full cross-library comparison are published at
+[lpgauth.github.io/torque/dev/bench](https://lpgauth.github.io/torque/dev/bench/).
+
 Apple M1 Pro, OTP 29, Elixir 1.20. Both libraries are profile-guided
 optimised (PGO) builds: **Torque PGO** (via `scripts/pgo-build.sh`) and
 **Glazer PGO** (via `OPTIMIZE=1`).
@@ -299,12 +302,21 @@ End-to-end cost of pulling 5 fields out of a JSON blob: `parse` + `get`
 fully decode first). This is the apples-to-apples version of "get" — torque's
 selective extraction skips materializing the whole document.
 
+`parse_get_many_nil` goes further. Given a handle compiled once at startup
+(like glazer's compiled jq paths), it walks the document a single time and
+builds a value only where a path ends, so no document is built at all.
+`validate: false` also skips validating the regions no path selects, which on
+a document this small is most of what is left.
+
 | Library | ips | mean | median | p99 |
 |---|---|---|---|---|
-| **torque** parse(unique_keys) + get_many | **498.8K** | **2.00 μs** | **1.79 μs** | 3.42 μs |
-| **torque** parse + get_many | 485.4K | 2.06 μs | **1.79 μs** | **2.46 μs** |
-| **torque** parse + get x5 | 473.1K | 2.11 μs | 1.96 μs | 3.42 μs |
-| **glazer** decode + find x5 | 303.0K | 3.30 μs | 3.25 μs | 3.71 μs |
+| **torque** parse_get_many_nil unique_keys validate: false | **1288K** | **0.78 μs** | **0.75 μs** | **0.88 μs** |
+| **torque** parse_get_many_nil unique_keys | 672.8K | 1.49 μs | 1.42 μs | 1.63 μs |
+| **torque** parse_get_many_nil | 672.1K | 1.49 μs | 1.42 μs | 1.63 μs |
+| **torque** parse(unique_keys) + get_many | 471.8K | 2.12 μs | 1.88 μs | 5.00 μs |
+| **torque** parse + get_many | 453.8K | 2.20 μs | 1.83 μs | 4.63 μs |
+| **torque** parse + get x5 | 448.1K | 2.23 μs | 2.00 μs | 5.00 μs |
+| **glazer** decode + find x5 | 308.3K | 3.24 μs | 3.13 μs | 4.42 μs |
 
 Run benchmarks locally:
 

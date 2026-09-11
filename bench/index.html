@@ -132,7 +132,7 @@
       if (!m) return { type: name, payload: '', variant: name };
       var op = m[1].trim(), payload = m[2].trim();
       if (op === 'decode') return { type: 'Decode', payload: payload, variant: op };
-      if (op.lastIndexOf('parse+get', 0) === 0) return { type: 'Parse+Get', payload: payload, variant: op };
+      if (op.lastIndexOf('parse', 0) === 0) return { type: 'Parse+Get', payload: payload, variant: op };
       if (op.lastIndexOf('encode', 0) === 0) return { type: 'Encode', payload: payload, variant: op.replace('encode ', '') };
       return { type: op, payload: payload, variant: op };
     }
@@ -154,7 +154,8 @@
         'Decode — 750 KB Twitter',
         'Encode — 1.2 KB OpenRTB',
         'Encode — 750 KB Twitter',
-        'Parse+Get (5 fields) — 1.2 KB OpenRTB'
+        'Parse — 1.2 KB OpenRTB',
+        'Extract 5 fields — 1.2 KB OpenRTB'
       ];
 
       // group by benchmark group, sorted by GROUP_ORDER
