@@ -1,7 +1,7 @@
 [package]
 name = "torque_nif"
 # Must match @version in mix.exs — release.sh refuses to tag on a mismatch.
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 
 [lib]
