@@ -34,7 +34,8 @@ defmodule Torque do
 
   Structs are rejected with `{:error, :unhandled_struct}` unless they
   implement `Torque.Encoder` (see the protocol docs for deriving with
-  `:only` / `:except`).
+  `:only` / `:except`). Torque ships implementations for `Date`, `Time`,
+  `NaiveDateTime`, and `DateTime`, which encode as ISO 8601 strings.
 
   ## Scheduler awareness
 
@@ -66,8 +67,8 @@ defmodule Torque do
   # Bounds protocol expansion, mirroring the NIF's own MAX_DEPTH
   # (native/torque_nif/src/types.rs). Only struct expansions decrement it, so
   # ordinary nesting still reaches the NIF, which owns the `:nesting_too_deep`
-  # verdict. Without a bound, an implementation returning the struct itself —
-  # or any term containing it — expands forever.
+  # verdict. Without a bound, an implementation returning the struct itself,
+  # or any term containing it, expands forever.
   @max_expansion_depth 128
 
   @typedoc """
@@ -145,7 +146,9 @@ defmodule Torque do
     * Other atoms (encoded as JSON strings)
     * `{keyword_list}` tuples (jiffy-style proplist objects)
     * Structs implementing `Torque.Encoder` (any other struct fails
-      with `{:error, :unhandled_struct}`)
+      with `{:error, :unhandled_struct}`). A `Torque.Encoder` implementation
+      that expands the same struct again fails with
+      `{:error, :encoder_expansion_too_deep}`.
 
   ## Options
 
@@ -171,7 +174,11 @@ defmodule Torque do
   @doc group: :encode
   @spec encode(term(), keyword()) ::
           {:ok, binary()}
-          | {:error, binary() | :nesting_too_deep | :unhandled_struct}
+          | {:error,
+             binary()
+             | :nesting_too_deep
+             | :unhandled_struct
+             | :encoder_expansion_too_deep}
   def encode(term, opts \\ [])
 
   def encode(term, []) do
@@ -216,7 +223,9 @@ defmodule Torque do
   Raises on error. This is the fastest encoding path when the result
   is passed directly to I/O (e.g. as an HTTP response body).
 
-  Accepts the same options as `encode/2`.
+  Accepts the same options as `encode/2`. Structs go through
+  `Torque.Encoder` exactly as they do there; a struct without an
+  implementation raises `ArgumentError`.
 
   ## Examples
 
@@ -231,7 +240,7 @@ defmodule Torque do
     encode_iodata_native(term, false)
   catch
     :error, :unhandled_struct ->
-      term |> normalize() |> encode_iodata_retry(false)
+      encode_iodata_retry(term, false)
 
     :error, value ->
       raise ArgumentError, "encode error: #{inspect(value)}"
@@ -244,7 +253,7 @@ defmodule Torque do
       encode_iodata_native(term, dirty)
     catch
       :error, :unhandled_struct ->
-        term |> normalize() |> encode_iodata_retry(dirty)
+        encode_iodata_retry(term, dirty)
 
       :error, value ->
         raise ArgumentError, "encode error: #{inspect(value)}"
@@ -273,7 +282,10 @@ defmodule Torque do
   end
 
   defp encode_retry(term, dirty) do
-    term |> normalize() |> encode_native(dirty)
+    case normalize(term) do
+      {:ok, normalized} -> encode_native(normalized, dirty)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp encode_iodata_native(term, true), do: Torque.Native.encode_iodata_dirty(term)
@@ -282,12 +294,27 @@ defmodule Torque do
   # Retry path: a struct that still has no protocol implementation fails
   # with the same ArgumentError as every other encode error.
   defp encode_iodata_retry(term, dirty) do
+    case normalize(term) do
+      {:ok, normalized} -> encode_iodata_native_rescued(normalized, dirty)
+      {:error, reason} -> raise ArgumentError, "encode error: #{reason}"
+    end
+  end
+
+  defp encode_iodata_native_rescued(term, dirty) do
     encode_iodata_native(term, dirty)
   catch
     :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
   end
 
-  defp normalize(term), do: normalize(term, @max_expansion_depth)
+  # Returns `{:error, :encoder_expansion_too_deep}` rather than raising: `encode/2`
+  # is a non-bang function and its callers, `encode!/2` included, expect a tuple.
+  # The bound is thrown from deep inside the walk, where returning a result tuple
+  # would mean threading it through every container helper.
+  defp normalize(term) do
+    {:ok, normalize(term, @max_expansion_depth)}
+  catch
+    :encoder_expansion_too_deep -> {:error, :encoder_expansion_too_deep}
+  end
 
   defp normalize(%_{} = struct, depth) do
     # The bound lives inside this branch rather than in a clause guard: dialyzer
@@ -296,13 +323,7 @@ defmodule Torque do
     # reports any clause guard here as unreachable.
     if Torque.Encoder.impl_for(struct) != Torque.Encoder.Any do
       if depth <= 0 do
-        raise ArgumentError, """
-        Torque.Encoder expansion exceeded #{@max_expansion_depth} levels for #{inspect(struct.__struct__)}.
-
-        Either the struct is nested deeper than the encoder's #{@max_expansion_depth}-level
-        limit, or its Torque.Encoder implementation returns a term that expands
-        the same struct again (returning the struct itself, or a term containing it).
-        """
+        throw(:encoder_expansion_too_deep)
       end
 
       normalize(Torque.Encoder.encode(struct), depth - 1)

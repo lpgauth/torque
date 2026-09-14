@@ -10,6 +10,9 @@ defprotocol Torque.Encoder do
   The protocol is deliberately opt-in: a struct without an
   implementation is an error, never silently dropped fields.
 
+  Torque ships implementations for `Date`, `Time`, `NaiveDateTime`, and
+  `DateTime`, each encoding as its ISO 8601 string.
+
   ## Deriving
 
   Structs can derive the implementation, encoding all fields or a
@@ -37,8 +40,8 @@ defprotocol Torque.Encoder do
 
   `encode/1` must return a term that can be encoded without expanding the
   same struct again. Returning the struct itself, or a term containing it,
-  expands forever; expansion is bounded and raises `ArgumentError` beyond
-  that bound.
+  would expand forever; expansion is bounded at 128 levels and encoding
+  fails with `:encoder_expansion_too_deep` beyond that bound.
   """
 
   @fallback_to_any true
@@ -69,31 +72,34 @@ defimpl Torque.Encoder, for: Any do
   end
 
   defp fields_to_encode(fields, opts) do
+    # `:__struct__` is never encodable: taking it would rebuild a map the NIF
+    # re-reads as a struct, which then expands through this same
+    # implementation until the expansion bound stops it.
+    encodable = fields -- [:__struct__]
+
+    only = Keyword.get(opts, :only)
+    except = Keyword.get(opts, :except)
+
+    if only && except do
+      raise ArgumentError, ":only and :except are mutually exclusive, pass one or the other"
+    end
+
     cond do
-      only = Keyword.get(opts, :only) ->
-        case only -- fields do
-          [] ->
-            only
+      only -> validate!(only, encodable, :only)
+      except -> encodable -- validate!(except, encodable, :except)
+      true -> encodable
+    end
+  end
 
-          error_keys ->
-            raise ArgumentError,
-                  "unknown struct fields #{inspect(error_keys)} specified in :only. " <>
-                    "Expected one of: #{inspect(fields -- [:__struct__])}"
-        end
+  defp validate!(requested, encodable, opt) do
+    case requested -- encodable do
+      [] ->
+        requested
 
-      except = Keyword.get(opts, :except) ->
-        case except -- fields do
-          [] ->
-            fields -- [:__struct__ | except]
-
-          error_keys ->
-            raise ArgumentError,
-                  "unknown struct fields #{inspect(error_keys)} specified in :except. " <>
-                    "Expected one of: #{inspect(fields -- [:__struct__])}"
-        end
-
-      true ->
-        fields -- [:__struct__]
+      unknown ->
+        raise ArgumentError,
+              "unknown struct fields #{inspect(unknown)} specified in #{inspect(opt)}. " <>
+                "Expected one of: #{inspect(encodable)}"
     end
   end
 
@@ -102,4 +108,20 @@ defimpl Torque.Encoder, for: Any do
   # after the retry — it is never silently dropped.
   @impl true
   def encode(term), do: term
+end
+
+defimpl Torque.Encoder, for: Date do
+  def encode(date), do: Date.to_iso8601(date)
+end
+
+defimpl Torque.Encoder, for: Time do
+  def encode(time), do: Time.to_iso8601(time)
+end
+
+defimpl Torque.Encoder, for: NaiveDateTime do
+  def encode(naive), do: NaiveDateTime.to_iso8601(naive)
+end
+
+defimpl Torque.Encoder, for: DateTime do
+  def encode(datetime), do: DateTime.to_iso8601(datetime)
 end

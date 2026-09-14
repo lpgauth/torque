@@ -193,6 +193,28 @@ defmodule Torque.EncoderProtocolTest do
       end
     end
 
+    test ":only and :except together raise at compile time" do
+      assert_raise ArgumentError, ~r/mutually exclusive/, fn ->
+        Code.compile_string("""
+        defmodule BothDerive do
+          @derive {Torque.Encoder, only: [:id], except: [:secret]}
+          defstruct [:id, :secret]
+        end
+        """)
+      end
+    end
+
+    test ":__struct__ is not an encodable field" do
+      assert_raise ArgumentError, ~r/unknown struct fields/, fn ->
+        Code.compile_string("""
+        defmodule StructKeyDerive do
+          @derive {Torque.Encoder, only: [:__struct__]}
+          defstruct [:id]
+        end
+        """)
+      end
+    end
+
     test "unknown fields in :except raise at compile time" do
       assert_raise ArgumentError, ~r/unknown struct fields/, fn ->
         Code.compile_string("""
@@ -205,6 +227,31 @@ defmodule Torque.EncoderProtocolTest do
     end
   end
 
+  describe "built-in implementations" do
+    test "Date, Time, NaiveDateTime and DateTime encode as ISO 8601 strings" do
+      term = %{
+        d: ~D[2026-09-14],
+        t: ~T[12:34:56],
+        n: ~N[2026-09-14 12:34:56],
+        dt: ~U[2026-09-14 12:34:56Z]
+      }
+
+      assert {:ok, json} = Torque.encode(term)
+
+      assert %{
+               "d" => "2026-09-14",
+               "t" => "12:34:56",
+               "n" => "2026-09-14T12:34:56",
+               "dt" => "2026-09-14T12:34:56Z"
+             } = Jason.decode!(json)
+    end
+
+    test "they work nested in lists" do
+      assert {:ok, json} = Torque.encode([~D[2026-01-01], ~D[2026-12-31]])
+      assert ["2026-01-01", "2026-12-31"] = Jason.decode!(json)
+    end
+  end
+
   describe "proplist tuples" do
     test "structs inside proplist values are normalized" do
       assert {:ok, json} = Torque.encode({[{:a, %TestStruct{name: "p", value: 1}}]})
@@ -213,33 +260,38 @@ defmodule Torque.EncoderProtocolTest do
   end
 
   describe "protocol expansion is bounded" do
-    # Regression: these used to recurse forever (a silent hang, no error).
-    test "an implementation returning the struct itself raises instead of hanging" do
-      assert_raise ArgumentError, ~r/expansion exceeded/, fn ->
-        Torque.encode(%ReturnsSelf{})
+    # Regression: these used to recurse forever (a silent hang, no error), and
+    # then to raise out of `encode/2`, which is documented to return a tuple.
+    test "an implementation returning the struct itself reports the bound" do
+      assert {:error, :encoder_expansion_too_deep} = Torque.encode(%ReturnsSelf{})
+    end
+
+    test "an implementation returning a term containing the struct reports the bound" do
+      assert {:error, :encoder_expansion_too_deep} = Torque.encode(%ContainsSelf{id: 1})
+    end
+
+    test "mutually recursive implementations report the bound" do
+      assert {:error, :encoder_expansion_too_deep} = Torque.encode(%CycleLeft{})
+    end
+
+    test "encode!/1 raises on the bound" do
+      assert_raise ArgumentError, ~r/encoder_expansion_too_deep/, fn ->
+        Torque.encode!(%ReturnsSelf{})
       end
     end
 
-    test "an implementation returning a term containing the struct raises" do
-      assert_raise ArgumentError, ~r/expansion exceeded/, fn ->
-        Torque.encode(%ContainsSelf{id: 1})
-      end
-    end
-
-    test "mutually recursive implementations raise" do
-      assert_raise ArgumentError, ~r/expansion exceeded/, fn ->
-        Torque.encode(%CycleLeft{})
-      end
-    end
-
-    test "the raising path also raises on the iodata encoder" do
-      assert_raise ArgumentError, ~r/expansion exceeded/, fn ->
+    test "the iodata encoder raises on the bound" do
+      assert_raise ArgumentError, ~r/encoder_expansion_too_deep/, fn ->
         Torque.encode_to_iodata(%ReturnsSelf{})
       end
 
-      assert_raise ArgumentError, ~r/expansion exceeded/, fn ->
+      assert_raise ArgumentError, ~r/encoder_expansion_too_deep/, fn ->
         Torque.encode_to_iodata(%ContainsSelf{id: 1})
       end
+    end
+
+    test "dirty: true reports the bound the same way" do
+      assert {:error, :encoder_expansion_too_deep} = Torque.encode(%ReturnsSelf{}, dirty: true)
     end
 
     test "finite recursion through the same struct type still works" do
@@ -259,14 +311,15 @@ defmodule Torque.EncoderProtocolTest do
              } = Jason.decode!(json)
     end
 
-    test "a struct nested beyond the expansion bound raises rather than nesting_too_deep" do
-      # 200 nested Tree levels: expansion depth exceeds the bound.
+    test "a struct nested beyond the expansion bound reports the bound, not nesting_too_deep" do
+      # 200 nested Tree levels: expansion depth exceeds the bound. The NIF's own
+      # MAX_DEPTH would reject this too, but expansion stops first.
       deep =
         Enum.reduce(1..200, %Tree{value: 0, children: []}, fn i, acc ->
           %Tree{value: i, children: [acc]}
         end)
 
-      assert_raise ArgumentError, ~r/expansion exceeded/, fn -> Torque.encode(deep) end
+      assert {:error, :encoder_expansion_too_deep} = Torque.encode(deep)
     end
 
     test "deeply nested plain terms still report nesting_too_deep" do

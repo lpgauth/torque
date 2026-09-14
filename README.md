@@ -14,6 +14,7 @@ Torque provides the fastest JSON encoding and decoding available in the BEAM eco
 - Pre-compiled pointers with fused parse + extract (`parse_get_many_nil/2`)
 - Automatic dirty CPU scheduler dispatch for decode/parse inputs larger than 20 KB (opt-in `dirty: true` for encode)
 - jiffy-compatible `{proplist}` encoding
+- Opt-in `Torque.Encoder` protocol for encoding structs, with `@derive`
 
 ## Installation
 
@@ -155,6 +156,14 @@ end
 defstruct [:id, :name, :secret]
 ```
 
+`Date`, `Time`, `NaiveDateTime`, and `DateTime` ship with implementations and
+encode as ISO 8601 strings.
+
+> **Breaking change in 0.4.0.** Structs previously encoded as raw maps, leaking
+> the struct marker into the output: `~D[2026-09-14]` produced
+> `{"calendar":"Elixir.Calendar.ISO","month":9,"__struct__":"Elixir.Date",...}`.
+> They now error unless the protocol is implemented.
+
 Unlike decoding, encoding cannot cheaply predict its output size, so dirty
 scheduler dispatch is opt-in. Pass `dirty: true` (accepted by `encode/2`,
 `encode!/2`, `encode_to_iodata/2`, and `encode_to_iodata!/2`) when terms are
@@ -214,6 +223,7 @@ Integers outside the signed/unsigned 64-bit range decode as exact arbitrary-prec
 | `nil` | `null` |
 | atom | string |
 | `{keyword_list}` | object |
+| struct implementing `Torque.Encoder` | whatever `encode/1` returns |
 
 ## Errors
 
@@ -237,6 +247,8 @@ Functions return `{:error, reason}` tuples (or raise `ArgumentError` for bang/io
 | `:malformed_proplist` | `encode/1` | `{proplist}` contains a non-`{key, value}` element |
 | `:non_finite_float` | `encode/1` | Float is infinity or NaN (unreachable from normal BEAM code) |
 | `:nesting_too_deep` | `encode/1` | Term exceeds 128 nesting levels |
+| `:unhandled_struct` | `encode/1` | Struct has no `Torque.Encoder` implementation |
+| `:encoder_expansion_too_deep` | `encode/1` | A `Torque.Encoder` implementation expands the same struct again, or structs nest past 128 levels |
 
 ## Benchmarks
 
