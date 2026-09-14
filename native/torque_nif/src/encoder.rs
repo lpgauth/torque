@@ -34,6 +34,7 @@ enum EncodeError {
     MalformedProplist,
     DepthExceeded,
     InvalidUtf8,
+    UnhandledStruct,
 }
 
 #[inline]
@@ -45,6 +46,7 @@ fn error_reason(e: EncodeError) -> ERL_NIF_TERM {
         EncodeError::InvalidKey => atoms::invalid_key().as_c_arg(),
         EncodeError::MalformedProplist => atoms::malformed_proplist().as_c_arg(),
         EncodeError::InvalidUtf8 => atoms::invalid_utf8().as_c_arg(),
+        EncodeError::UnhandledStruct => atoms::unhandled_struct().as_c_arg(),
     }
 }
 
@@ -268,9 +270,20 @@ fn encode_map(
         return Err(EncodeError::DepthExceeded);
     }
     let iter = MapIterator::new(term).ok_or(EncodeError::UnsupportedType)?;
+    // Elixir structs (maps carrying an atom `__struct__` key) are not
+    // encodable as-is: they must opt into Torque.Encoder, and the Elixir layer
+    // normalizes them through the protocol and retries once. The test rides on
+    // the iteration the encoder already does: atoms are immediate terms, so a
+    // key is the `__struct__` atom exactly when the raw terms are equal. A
+    // separate enif_get_map_value would rescan the key array the loop is about
+    // to walk anyway. A binary "__struct__" key is boxed and never matches.
+    let struct_key = atoms::__struct__().as_c_arg();
     buf.push(b'{');
     let mut first = true;
     for (key, value) in iter {
+        if key.as_c_arg() == struct_key {
+            return Err(EncodeError::UnhandledStruct);
+        }
         if !first {
             buf.push(b',');
         }

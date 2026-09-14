@@ -106,6 +106,8 @@ Torque is a high-performance JSON library for Elixir using Rustler NIFs backed b
 
 `encode/1` walks Elixir terms directly (no intermediate representation) and writes JSON bytes to a buffer. Supports maps (atom/binary/integer keys — integer keys are stringified, since JSON object names must be strings), lists, numbers, booleans, nil, and jiffy-style `{proplist}` tuples.
 
+Structs go through the optional `Torque.Encoder` protocol, and the split between NIF and BEAM is deliberate: the NIF cannot call an Elixir protocol, so `encode_map` fails the whole encode with `:unhandled_struct` the moment a key compares equal to the `__struct__` atom, and `Torque.normalize/1` then walks the term on the BEAM, replaces every struct with its protocol output, and retries the NIF once. Detection rides on the key iteration the encoder already does rather than a per-map `enif_get_map_value`, which would rescan the flatmap key array the loop is about to walk (measured 2-3% on map-heavy payloads, 3-5% on arrays of tiny maps). `normalize/1` returns containers untouched when nothing inside them changed, so one struct in a large document does not rebuild the whole document. Expansion is bounded at 128 struct levels and reports `:encoder_expansion_too_deep`, because an implementation returning the struct itself would otherwise expand forever; the bound is thrown from inside the walk and caught at the entry point so `encode/2` can stay a non-raising function. Protocol consolidation is off in `:test` only (`mix.exs`), because test fixtures define implementations after consolidation would have run.
+
 Strings go through `escape.rs`'s `write_json_string`, which reserves once for the quotes and worst-case body and scans strings shorter than `SHORT_STRING` (32 bytes) eight bytes at a time before handing the first special byte to the SIMD kernels. It returns a resume offset rather than a clean/dirty verdict, so a late escape does not rescan the clean prefix. The six SIMD kernels repeat the same emit blocks by hand on purpose: factoring them into helpers changes how they inline under the fat-LTO build and measured slower on escape-heavy and UTF-8-heavy input.
 
 Atom names are read as Latin-1 into a stack buffer, because `ERL_NIF_UTF8` needs NIF 2.17 and the NIF still loads on 2.15. A name with any character above U+00FF makes that read fail, so those atoms go through `enif_term_to_binary` and the name is taken from the `SMALL_ATOM_UTF8_EXT` / `ATOM_UTF8_EXT` payload instead. Only the names the Latin-1 read rejects pay for that binary.
@@ -132,10 +134,11 @@ Decode/parse inputs larger than 20 KB are automatically dispatched to dirty CPU 
 - `lib/torque.ex` — public API with `@doc`, typespecs, dirty scheduler dispatch
 - `lib/torque/native.ex` — RustlerPrecompiled NIF stubs (set `TORQUE_BUILD=true` to compile from source)
 - `lib/torque/build.ex` — captures `TORQUE_BUILD` and makes switching it recompile `Torque.Native`
+- `lib/torque/encoder.ex`: `Torque.Encoder` protocol, `@derive` support via `__deriving__/3` on the `Any` impl, built-in `Date`/`Time`/`NaiveDateTime`/`DateTime` implementations
 - `native/torque_nif/src/lib.rs` — NIF registration, `ParsedDocument` + `CompiledPaths` (`PathSeg`) resources
 - `native/torque_nif/src/decoder.rs` — parse, get, get_many, get_many_nil, decode NIFs; compiled-pointer + fused `parse_get_many_nil` path
 - `native/torque_nif/src/native_decode.rs` — fused decoder; builds terms during the SIMD parse via sonic-rs's `JsonVisitor`
 - `native/torque_nif/src/encoder.rs` — direct term-walking JSON encoder
 - `native/torque_nif/src/types.rs` — sonic_rs Value → Erlang term conversion (used by get/get_many)
-- `native/torque_nif/src/atoms.rs` — cached atoms (ok, error, nil, no_such_field, nesting_too_deep, unsupported_type, non_finite_float, invalid_key, malformed_proplist, invalid_utf8)
+- `native/torque_nif/src/atoms.rs` — cached atoms (ok, error, nil, no_such_field, nesting_too_deep, unsupported_type, non_finite_float, invalid_key, malformed_proplist, invalid_utf8, unhandled_struct, `__struct__`)
 - `native/sonic-rs/` — vendored, Torque-patched sonic-rs (native `JsonVisitor` exposed + DOM recursion-depth limit)
