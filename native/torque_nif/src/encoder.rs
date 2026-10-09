@@ -7,7 +7,7 @@ use rustler::sys::{
     enif_term_to_binary, ErlNifBinary, ErlNifCharEncoding, ErlNifEnv, ERL_NIF_TERM,
 };
 use rustler::{schedule, Atom, Env, NewBinary, Term, TermType};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::mem::MaybeUninit;
 
 /// Below this output size the work is sub-microsecond, so the
@@ -19,17 +19,109 @@ const TIMESLICE_MIN_BYTES: usize = 4096;
 /// doesn't pin a large allocation on a scheduler thread indefinitely.
 const BUF_RETAIN_CAP: usize = 1 << 20;
 
-thread_local! {
-    /// Reused across encode calls on each scheduler thread. Avoids a
-    /// malloc/free per call, which is the dominant per-call cost for small
-    /// payloads. NIFs run to completion without preemption and the encoder
-    /// never re-enters this NIF, so the borrow is never nested.
-    static ENCODE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(2048));
+/// Atom-name cache slots per scheduler thread, indexed by atom-table index.
+const ATOM_SLOTS: usize = 512;
+/// Longest quoted, escaped name the cache holds.
+const ATOM_NAME_CAP: usize = 32;
 
+#[derive(Clone, Copy)]
+struct AtomName {
+    term: ERL_NIF_TERM,
+    len: usize,
+    quoted: [u8; ATOM_NAME_CAP],
+}
+
+/// Quoted, escaped JSON spellings of encoded atoms, keyed by the raw term.
+/// Atoms are never garbage collected, so entries stay valid across calls, and
+/// raw terms of different types never compare equal, so a hit needs no type
+/// check.
+struct AtomNames {
+    slots: Box<[AtomName; ATOM_SLOTS]>,
+}
+
+impl AtomNames {
+    fn new() -> Self {
+        // 0 has the header tag, which no term carries, so empty slots never hit.
+        let empty = AtomName {
+            term: 0,
+            len: 0,
+            quoted: [0; ATOM_NAME_CAP],
+        };
+        AtomNames {
+            slots: Box::new([empty; ATOM_SLOTS]),
+        }
+    }
+
+    /// ERTS tags an atom as `index << 6 | 0b001011`. Any other layout only
+    /// degrades the spread, never correctness: hits compare the whole term.
+    #[inline(always)]
+    fn slot(term: ERL_NIF_TERM) -> usize {
+        (term >> 6) & (ATOM_SLOTS - 1)
+    }
+
+    /// Appends `term`'s quoted name when it is a cached atom.
+    #[inline(always)]
+    fn write_cached(&self, term: ERL_NIF_TERM, buf: &mut Vec<u8>) -> bool {
+        let entry = &self.slots[Self::slot(term)];
+        if entry.term != term {
+            return false;
+        }
+        buf.reserve(ATOM_NAME_CAP);
+        // SAFETY: ATOM_NAME_CAP bytes were just reserved. The fixed-size copy
+        // is two vector moves where `len` bytes would be a memcpy call.
+        unsafe {
+            let at = buf.len();
+            std::ptr::copy_nonoverlapping(
+                entry.quoted.as_ptr(),
+                buf.as_mut_ptr().add(at),
+                ATOM_NAME_CAP,
+            );
+            buf.set_len(at + entry.len);
+        }
+        true
+    }
+
+    /// Appends `term`'s quoted name, caching it when it fits.
+    #[inline(never)]
+    fn write(
+        &mut self,
+        env_raw: *mut ErlNifEnv,
+        term: ERL_NIF_TERM,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), EncodeError> {
+        let start = buf.len();
+        buf.push(b'"');
+        write_atom_name(env_raw, term, buf)?;
+        buf.push(b'"');
+        let quoted = &buf[start..];
+        if quoted.len() <= ATOM_NAME_CAP {
+            let entry = &mut self.slots[Self::slot(term)];
+            entry.quoted[..quoted.len()].copy_from_slice(quoted);
+            entry.len = quoted.len();
+            entry.term = term;
+        }
+        Ok(())
+    }
+}
+
+struct Scratch {
+    buf: Vec<u8>,
+    names: AtomNames,
     /// The atom that encodes as JSON null for the current call: `nil` from
-    /// Elixir, `null` from Erlang. Set on entry rather than threaded through
-    /// the recursive encoder, which only reads it for atoms.
-    static NULL_ATOM: Cell<ERL_NIF_TERM> = const { Cell::new(0) };
+    /// Elixir, `null` from Erlang. Set on entry; it rides in the scratch the
+    /// recursion already carries rather than a thread-local read per atom.
+    null: ERL_NIF_TERM,
+}
+
+thread_local! {
+    /// Reused across encode calls on each scheduler thread, avoiding a
+    /// malloc/free per call. NIFs run to completion and the encoder never
+    /// re-enters, so the borrow is never nested.
+    static SCRATCH: RefCell<Scratch> = RefCell::new(Scratch {
+        buf: Vec::with_capacity(2048),
+        names: AtomNames::new(),
+        null: 0,
+    });
 }
 
 enum EncodeError {
@@ -186,19 +278,19 @@ fn encode_impl<'a>(
     null: ERL_NIF_TERM,
 ) -> Term<'a> {
     let env_raw = env.as_c_arg();
-    NULL_ATOM.with(|cell| cell.set(null));
-    ENCODE_BUF.with(|cell| {
-        let mut buf = cell.borrow_mut();
-        buf.clear();
-        let result = match encode_term(env, env_raw, term, &mut buf, MAX_DEPTH) {
+    SCRATCH.with(|cell| {
+        let s = &mut *cell.borrow_mut();
+        s.buf.clear();
+        s.null = null;
+        let result = match encode_term(env, env_raw, term, s, MAX_DEPTH) {
             Ok(()) => {
-                let bin_term = buf_to_binary(env, &buf, report_timeslice);
+                let bin_term = buf_to_binary(env, &s.buf, report_timeslice);
                 make_tuple2(env, atoms::ok().as_c_arg(), bin_term.as_c_arg())
             }
             Err(e) => make_tuple2(env, atoms::error().as_c_arg(), error_reason(e)),
         };
-        if buf.capacity() > BUF_RETAIN_CAP {
-            buf.shrink_to(BUF_RETAIN_CAP);
+        if s.buf.capacity() > BUF_RETAIN_CAP {
+            s.buf.shrink_to(BUF_RETAIN_CAP);
         }
         result
     })
@@ -232,12 +324,12 @@ fn encode_opts_dirty<'a>(env: Env<'a>, term: Term<'a>, null: Atom) -> Term<'a> {
 #[inline]
 fn encode_iodata_impl<'a>(env: Env<'a>, term: Term<'a>, report_timeslice: bool) -> Term<'a> {
     let env_raw = env.as_c_arg();
-    NULL_ATOM.with(|cell| cell.set(atoms::nil().as_c_arg()));
-    ENCODE_BUF.with(|cell| {
-        let mut buf = cell.borrow_mut();
-        buf.clear();
-        let result = match encode_term(env, env_raw, term, &mut buf, MAX_DEPTH) {
-            Ok(()) => buf_to_binary(env, &buf, report_timeslice),
+    SCRATCH.with(|cell| {
+        let s = &mut *cell.borrow_mut();
+        s.buf.clear();
+        s.null = atoms::nil().as_c_arg();
+        let result = match encode_term(env, env_raw, term, s, MAX_DEPTH) {
+            Ok(()) => buf_to_binary(env, &s.buf, report_timeslice),
             Err(e) => unsafe {
                 Term::new(
                     env,
@@ -245,8 +337,8 @@ fn encode_iodata_impl<'a>(env: Env<'a>, term: Term<'a>, report_timeslice: bool) 
                 )
             },
         };
-        if buf.capacity() > BUF_RETAIN_CAP {
-            buf.shrink_to(BUF_RETAIN_CAP);
+        if s.buf.capacity() > BUF_RETAIN_CAP {
+            s.buf.shrink_to(BUF_RETAIN_CAP);
         }
         result
     })
@@ -267,17 +359,17 @@ fn encode_term(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
-    buf: &mut Vec<u8>,
+    s: &mut Scratch,
     depth: u32,
 ) -> Result<(), EncodeError> {
     match term.get_type() {
-        TermType::Map => encode_map(env, env_raw, term, buf, depth),
-        TermType::List => encode_list(env, env_raw, term, buf, depth),
-        TermType::Binary => encode_binary(env_raw, term, buf),
-        TermType::Integer => encode_integer(env_raw, term, buf),
-        TermType::Float => encode_float(env_raw, term, buf),
-        TermType::Atom => encode_atom(env_raw, term, buf),
-        TermType::Tuple => encode_tuple(env, env_raw, term, buf, depth),
+        TermType::Map => encode_map(env, env_raw, term, s, depth),
+        TermType::List => encode_list(env, env_raw, term, s, depth),
+        TermType::Binary => encode_binary(env_raw, term, &mut s.buf),
+        TermType::Integer => encode_integer(env_raw, term, &mut s.buf),
+        TermType::Float => encode_float(env_raw, term, &mut s.buf),
+        TermType::Atom => encode_atom(env_raw, term, s),
+        TermType::Tuple => encode_tuple(env, env_raw, term, s, depth),
         _ => Err(EncodeError::UnsupportedType),
     }
 }
@@ -286,7 +378,7 @@ fn encode_map(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
-    buf: &mut Vec<u8>,
+    s: &mut Scratch,
     depth: u32,
 ) -> Result<(), EncodeError> {
     if depth == 0 {
@@ -301,84 +393,87 @@ fn encode_map(
     // separate enif_get_map_value would rescan the key array the loop is about
     // to walk anyway. A binary "__struct__" key is boxed and never matches.
     let struct_key = atoms::__struct__().as_c_arg();
-    buf.push(b'{');
+    s.buf.push(b'{');
     let mut first = true;
     for (key, value) in iter {
         if key.as_c_arg() == struct_key {
             return Err(EncodeError::UnhandledStruct);
         }
         if !first {
-            buf.push(b',');
+            s.buf.push(b',');
         }
         first = false;
-        encode_map_key(env_raw, key, buf)?;
-        buf.push(b':');
-        encode_term(env, env_raw, value, buf, depth - 1)?;
+        encode_map_key(env_raw, key, s)?;
+        s.buf.push(b':');
+        encode_term(env, env_raw, value, s, depth - 1)?;
     }
-    buf.push(b'}');
+    s.buf.push(b'}');
     Ok(())
 }
 
 #[inline]
-fn encode_map_key(
-    env_raw: *mut ErlNifEnv,
-    key: Term,
-    buf: &mut Vec<u8>,
-) -> Result<(), EncodeError> {
+fn encode_map_key(env_raw: *mut ErlNifEnv, key: Term, s: &mut Scratch) -> Result<(), EncodeError> {
+    let raw = key.as_c_arg();
+    // Atoms are immediates (low tag bits 0b11), so boxed binary keys skip the
+    // probe. A filter only: a hit still compares the whole term.
+    if raw & 0b11 == 0b11 && s.names.write_cached(raw, &mut s.buf) {
+        return Ok(());
+    }
     // `enif_inspect_binary` doubles as the type check for the common binary-key
     // path, avoiding a separate `enif_term_type` call.
     let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
-    if unsafe { enif_inspect_binary(env_raw, key.as_c_arg(), bin.as_mut_ptr()) } != 0 {
+    if unsafe { enif_inspect_binary(env_raw, raw, bin.as_mut_ptr()) } != 0 {
         let slice = unsafe {
             let bin = bin.assume_init();
             std::slice::from_raw_parts(bin.data, bin.size)
         };
-        return crate::escape::write_json_string(slice, buf).map_err(|_| EncodeError::InvalidUtf8);
+        return crate::escape::write_json_string(slice, &mut s.buf)
+            .map_err(|_| EncodeError::InvalidUtf8);
     }
-    buf.push(b'"');
     match key.get_type() {
-        TermType::Atom => {
-            write_atom_name(env_raw, key.as_c_arg(), buf)?;
-        }
+        TermType::Atom => s.names.write(env_raw, raw, &mut s.buf),
         // Object names must be strings (RFC 8259 §4), so integer keys are
         // stringified rather than rejected, matching Jason. Skips escaping
         // because a decimal integer is only digits and a leading '-'.
-        TermType::Integer => encode_integer(env_raw, key, buf)?,
-        _ => return Err(EncodeError::InvalidKey),
+        TermType::Integer => {
+            s.buf.push(b'"');
+            encode_integer(env_raw, key, &mut s.buf)?;
+            s.buf.push(b'"');
+            Ok(())
+        }
+        _ => Err(EncodeError::InvalidKey),
     }
-    buf.push(b'"');
-    Ok(())
 }
 
 fn encode_list(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
-    buf: &mut Vec<u8>,
+    s: &mut Scratch,
     depth: u32,
 ) -> Result<(), EncodeError> {
     if depth == 0 {
         return Err(EncodeError::DepthExceeded);
     }
-    buf.push(b'[');
+    s.buf.push(b'[');
     let mut first = true;
     let mut current = term.as_c_arg();
     let mut head: ERL_NIF_TERM = 0;
     let mut tail: ERL_NIF_TERM = 0;
     while unsafe { enif_get_list_cell(env_raw, current, &mut head, &mut tail) } != 0 {
         if !first {
-            buf.push(b',');
+            s.buf.push(b',');
         }
         first = false;
         let item = unsafe { Term::new(env, head) };
-        encode_term(env, env_raw, item, buf, depth - 1)?;
+        encode_term(env, env_raw, item, s, depth - 1)?;
         current = tail;
     }
     // Improper list: the loop ends on a non-cons tail, which must be [].
     if unsafe { enif_is_empty_list(env_raw, current) } == 0 {
         return Err(EncodeError::UnsupportedType);
     }
-    buf.push(b']');
+    s.buf.push(b']');
     Ok(())
 }
 
@@ -447,18 +542,16 @@ fn encode_float(env_raw: *mut ErlNifEnv, term: Term, buf: &mut Vec<u8>) -> Resul
 }
 
 #[inline]
-fn encode_atom(env_raw: *mut ErlNifEnv, term: Term, buf: &mut Vec<u8>) -> Result<(), EncodeError> {
+fn encode_atom(env_raw: *mut ErlNifEnv, term: Term, s: &mut Scratch) -> Result<(), EncodeError> {
     let raw = term.as_c_arg();
     if raw == atoms::r#true().as_c_arg() {
-        buf.extend_from_slice(b"true");
+        s.buf.extend_from_slice(b"true");
     } else if raw == atoms::r#false().as_c_arg() {
-        buf.extend_from_slice(b"false");
-    } else if raw == NULL_ATOM.with(Cell::get) {
-        buf.extend_from_slice(b"null");
-    } else {
-        buf.push(b'"');
-        write_atom_name(env_raw, raw, buf)?;
-        buf.push(b'"');
+        s.buf.extend_from_slice(b"false");
+    } else if raw == s.null {
+        s.buf.extend_from_slice(b"null");
+    } else if !s.names.write_cached(raw, &mut s.buf) {
+        s.names.write(env_raw, raw, &mut s.buf)?;
     }
     Ok(())
 }
@@ -484,14 +577,14 @@ fn encode_tuple(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
-    buf: &mut Vec<u8>,
+    s: &mut Scratch,
     depth: u32,
 ) -> Result<(), EncodeError> {
     let elements = unsafe { get_tuple_raw(env_raw, term)? };
     if elements.len() == 1 {
         let inner = unsafe { Term::new(env, elements[0]) };
         if inner.get_type() == TermType::List {
-            return encode_proplist(env, env_raw, inner, buf, depth);
+            return encode_proplist(env, env_raw, inner, s, depth);
         }
     }
     Err(EncodeError::UnsupportedType)
@@ -501,13 +594,13 @@ fn encode_proplist(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
-    buf: &mut Vec<u8>,
+    s: &mut Scratch,
     depth: u32,
 ) -> Result<(), EncodeError> {
     if depth == 0 {
         return Err(EncodeError::DepthExceeded);
     }
-    buf.push(b'{');
+    s.buf.push(b'{');
     let mut first = true;
     let mut current = term.as_c_arg();
     let mut head: ERL_NIF_TERM = 0;
@@ -521,20 +614,20 @@ fn encode_proplist(
             return Err(EncodeError::MalformedProplist);
         }
         if !first {
-            buf.push(b',');
+            s.buf.push(b',');
         }
         first = false;
         let key = unsafe { Term::new(env, pair[0]) };
         let val = unsafe { Term::new(env, pair[1]) };
-        encode_map_key(env_raw, key, buf)?;
-        buf.push(b':');
-        encode_term(env, env_raw, val, buf, depth - 1)?;
+        encode_map_key(env_raw, key, s)?;
+        s.buf.push(b':');
+        encode_term(env, env_raw, val, s, depth - 1)?;
         current = tail;
     }
     // Improper list: the loop ends on a non-cons tail, which must be [].
     if unsafe { enif_is_empty_list(env_raw, current) } == 0 {
         return Err(EncodeError::MalformedProplist);
     }
-    buf.push(b'}');
+    s.buf.push(b'}');
     Ok(())
 }

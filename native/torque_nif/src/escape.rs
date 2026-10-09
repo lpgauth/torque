@@ -51,6 +51,11 @@ const fn build_quote_tab() -> [QuoteEntry; 256] {
     tab
 }
 
+/// The SIMD kernels emit an escape as two fixed-width stores, the whole input
+/// chunk and all 8 bytes of the entry, each partly overwritten afterwards;
+/// variable-length copies compile to `memcpy` calls. The kernels run only
+/// while a whole chunk of input is left and emit at most 6 bytes per input
+/// byte, so neither store reaches 6 × the input length.
 static QUOTE_TAB: [QuoteEntry; 256] = build_quote_tab();
 
 const fn build_needs_escape() -> [bool; 256] {
@@ -208,6 +213,10 @@ pub(crate) fn escape_to_vec(bytes: &[u8], buf: &mut Vec<u8>) {
     unsafe { buf.set_len(base + written) };
 }
 
+/// # Safety
+///
+/// `src` must be readable for `len` bytes and `dst` writable for `6 * len`
+/// bytes; escapes overrun what they keep, but not that (see `QUOTE_TAB`).
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn escape_neon(src: *const u8, len: usize, dst: *mut u8) -> usize {
@@ -235,12 +244,13 @@ unsafe fn escape_neon(src: *const u8, len: usize, dst: *mut u8) -> usize {
             vst1q_u8(mask.as_mut_ptr(), needs);
             let first = mask.iter().position(|&x| x != 0).unwrap_unchecked();
 
-            std::ptr::copy_nonoverlapping(src.add(in_pos), dst.add(out_pos), first);
+            // Fixed-width stores; see `QUOTE_TAB`.
+            vst1q_u8(dst.add(out_pos), v);
             out_pos += first;
 
             let b = *src.add(in_pos + first);
             let (esc_len, esc_bytes) = QUOTE_TAB[b as usize];
-            std::ptr::copy_nonoverlapping(esc_bytes.as_ptr(), dst.add(out_pos), esc_len as usize);
+            (dst.add(out_pos) as *mut [u8; 8]).write_unaligned(esc_bytes);
             out_pos += esc_len as usize;
             in_pos += first + 1;
         }
@@ -249,6 +259,11 @@ unsafe fn escape_neon(src: *const u8, len: usize, dst: *mut u8) -> usize {
     out_pos + escape_scalar(src.add(in_pos), len - in_pos, dst.add(out_pos))
 }
 
+/// # Safety
+///
+/// The CPU must support AVX2. `src` must be readable for `len` bytes and
+/// `dst` writable for `6 * len` bytes; escapes overrun what they keep, but
+/// not that (see `QUOTE_TAB`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn escape_avx2(src: *const u8, len: usize, dst: *mut u8) -> usize {
@@ -278,12 +293,13 @@ unsafe fn escape_avx2(src: *const u8, len: usize, dst: *mut u8) -> usize {
         } else {
             let first = mask.trailing_zeros() as usize;
 
-            std::ptr::copy_nonoverlapping(src.add(in_pos), dst.add(out_pos), first);
+            // Fixed-width stores; see `QUOTE_TAB`.
+            _mm256_storeu_si256(dst.add(out_pos) as *mut __m256i, v);
             out_pos += first;
 
             let b = *src.add(in_pos + first);
             let (esc_len, esc_bytes) = QUOTE_TAB[b as usize];
-            std::ptr::copy_nonoverlapping(esc_bytes.as_ptr(), dst.add(out_pos), esc_len as usize);
+            (dst.add(out_pos) as *mut [u8; 8]).write_unaligned(esc_bytes);
             out_pos += esc_len as usize;
             in_pos += first + 1;
         }
@@ -298,6 +314,10 @@ unsafe fn escape_avx2(src: *const u8, len: usize, dst: *mut u8) -> usize {
     out_pos + done + escape_sse2(src.add(in_pos + done), tail - done, dst.add(out_pos + done))
 }
 
+/// # Safety
+///
+/// `src` must be readable for `len` bytes and `dst` writable for `6 * len`
+/// bytes; escapes overrun what they keep, but not that (see `QUOTE_TAB`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn escape_sse2(src: *const u8, len: usize, dst: *mut u8) -> usize {
@@ -327,12 +347,13 @@ unsafe fn escape_sse2(src: *const u8, len: usize, dst: *mut u8) -> usize {
         } else {
             let first = mask.trailing_zeros() as usize;
 
-            std::ptr::copy_nonoverlapping(src.add(in_pos), dst.add(out_pos), first);
+            // Fixed-width stores; see `QUOTE_TAB`.
+            _mm_storeu_si128(dst.add(out_pos) as *mut __m128i, v);
             out_pos += first;
 
             let b = *src.add(in_pos + first);
             let (esc_len, esc_bytes) = QUOTE_TAB[b as usize];
-            std::ptr::copy_nonoverlapping(esc_bytes.as_ptr(), dst.add(out_pos), esc_len as usize);
+            (dst.add(out_pos) as *mut [u8; 8]).write_unaligned(esc_bytes);
             out_pos += esc_len as usize;
             in_pos += first + 1;
         }
@@ -428,6 +449,10 @@ pub(crate) fn write_json_string(bytes: &[u8], buf: &mut Vec<u8>) -> Result<(), (
 // AArch64 NEON — validating
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// `src` must be readable for `len` bytes and `dst` writable for `6 * len`
+/// bytes; escapes overrun what they keep, but not that (see `QUOTE_TAB`).
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn validate_escape_neon(src: *const u8, len: usize, dst: *mut u8) -> Result<usize, ()> {
@@ -463,12 +488,13 @@ unsafe fn validate_escape_neon(src: *const u8, len: usize, dst: *mut u8) -> Resu
             vst1q_u8(mask.as_mut_ptr(), needs);
             let first = mask.iter().position(|&x| x != 0).unwrap_unchecked();
 
-            std::ptr::copy_nonoverlapping(src.add(in_pos), dst.add(out_pos), first);
+            // Fixed-width stores; see `QUOTE_TAB`.
+            vst1q_u8(dst.add(out_pos), v);
             out_pos += first;
 
             let b = *src.add(in_pos + first);
             let (esc_len, esc_bytes) = QUOTE_TAB[b as usize];
-            std::ptr::copy_nonoverlapping(esc_bytes.as_ptr(), dst.add(out_pos), esc_len as usize);
+            (dst.add(out_pos) as *mut [u8; 8]).write_unaligned(esc_bytes);
             out_pos += esc_len as usize;
             in_pos += first + 1;
         }
@@ -481,6 +507,11 @@ unsafe fn validate_escape_neon(src: *const u8, len: usize, dst: *mut u8) -> Resu
 // x86-64 AVX2 — validating
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// The CPU must support AVX2. `src` must be readable for `len` bytes and
+/// `dst` writable for `6 * len` bytes; escapes overrun what they keep, but
+/// not that (see `QUOTE_TAB`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn validate_escape_avx2(src: *const u8, len: usize, dst: *mut u8) -> Result<usize, ()> {
@@ -517,12 +548,13 @@ unsafe fn validate_escape_avx2(src: *const u8, len: usize, dst: *mut u8) -> Resu
         } else {
             let first = mask.trailing_zeros() as usize;
 
-            std::ptr::copy_nonoverlapping(src.add(in_pos), dst.add(out_pos), first);
+            // Fixed-width stores; see `QUOTE_TAB`.
+            _mm256_storeu_si256(dst.add(out_pos) as *mut __m256i, v);
             out_pos += first;
 
             let b = *src.add(in_pos + first);
             let (esc_len, esc_bytes) = QUOTE_TAB[b as usize];
-            std::ptr::copy_nonoverlapping(esc_bytes.as_ptr(), dst.add(out_pos), esc_len as usize);
+            (dst.add(out_pos) as *mut [u8; 8]).write_unaligned(esc_bytes);
             out_pos += esc_len as usize;
             in_pos += first + 1;
         }
@@ -543,6 +575,10 @@ unsafe fn validate_escape_avx2(src: *const u8, len: usize, dst: *mut u8) -> Resu
 // x86-64 SSE2 — validating
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// `src` must be readable for `len` bytes and `dst` writable for `6 * len`
+/// bytes; escapes overrun what they keep, but not that (see `QUOTE_TAB`).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 unsafe fn validate_escape_sse2(src: *const u8, len: usize, dst: *mut u8) -> Result<usize, ()> {
@@ -579,12 +615,13 @@ unsafe fn validate_escape_sse2(src: *const u8, len: usize, dst: *mut u8) -> Resu
         } else {
             let first = mask.trailing_zeros() as usize;
 
-            std::ptr::copy_nonoverlapping(src.add(in_pos), dst.add(out_pos), first);
+            // Fixed-width stores; see `QUOTE_TAB`.
+            _mm_storeu_si128(dst.add(out_pos) as *mut __m128i, v);
             out_pos += first;
 
             let b = *src.add(in_pos + first);
             let (esc_len, esc_bytes) = QUOTE_TAB[b as usize];
-            std::ptr::copy_nonoverlapping(esc_bytes.as_ptr(), dst.add(out_pos), esc_len as usize);
+            (dst.add(out_pos) as *mut [u8; 8]).write_unaligned(esc_bytes);
             out_pos += esc_len as usize;
             in_pos += first + 1;
         }
@@ -908,6 +945,63 @@ mod tests {
                     write_json_string(&input, &mut got).is_err(),
                     "accepted {bad:?} after {pad} clean bytes"
                 );
+            }
+        }
+    }
+
+    /// An escape every `period` bytes; period 1 is all escapes, whose output
+    /// fills the whole 6 × len bound.
+    fn escape_heavy(len: usize, period: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| {
+                if i % period == 0 {
+                    [0x01, b'"', b'\\', b'\n'][i % 4]
+                } else {
+                    b'a'
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_kernels_write_nothing_past_six_times_the_input() {
+        type Kernel = fn(*const u8, usize, *mut u8) -> usize;
+        #[cfg_attr(not(target_arch = "x86_64"), allow(unused_mut))]
+        let mut kernels: Vec<(&str, Kernel)> = vec![
+            ("escape", |s, l, d| unsafe { escape_dispatch(s, l, d) }),
+            ("validate", |s, l, d| unsafe {
+                validate_escape_dispatch(s, l, d).expect("ascii")
+            }),
+        ];
+        // Dispatch prefers AVX2, which reaches SSE2 only for its tail.
+        #[cfg(target_arch = "x86_64")]
+        {
+            kernels.push(("escape_sse2", |s, l, d| unsafe { escape_sse2(s, l, d) }));
+            kernels.push(("validate_sse2", |s, l, d| unsafe {
+                validate_escape_sse2(s, l, d).expect("ascii")
+            }));
+        }
+
+        for len in 0..200usize {
+            for period in [1, 2, 3, 7, 33] {
+                let input = escape_heavy(len, period);
+                let want: Vec<u8> = input
+                    .iter()
+                    .flat_map(|&b| {
+                        let (n, esc) = QUOTE_TAB[b as usize];
+                        esc[..n as usize].to_vec()
+                    })
+                    .collect();
+                for (name, kernel) in &kernels {
+                    let bound = 6 * len;
+                    let mut dst = vec![0xAAu8; bound + 64];
+                    let n = kernel(input.as_ptr(), len, dst.as_mut_ptr());
+                    assert_eq!(&dst[..n], &want[..], "{name}: len {len} period {period}");
+                    assert!(
+                        dst[bound..].iter().all(|&b| b == 0xAA),
+                        "{name} wrote past 6 x {len} bytes, period {period}"
+                    );
+                }
             }
         }
     }

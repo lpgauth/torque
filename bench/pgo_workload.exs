@@ -52,6 +52,19 @@ end
 small_proplist = to_proplist.(to_proplist, small_term)
 large_proplist = to_proplist.(to_proplist, large_term)
 
+# Elixir callers mostly encode atom-keyed maps, whose names come from the
+# encoder's per-thread atom-name cache instead of the binary-key path.
+to_atom_keys = fn f, v ->
+  cond do
+    is_map(v) -> Map.new(v, fn {k, val} -> {String.to_atom(k), f.(f, val)} end)
+    is_list(v) -> Enum.map(v, &f.(f, &1))
+    true -> v
+  end
+end
+
+small_atoms = to_atom_keys.(to_atom_keys, small_term)
+large_atoms = to_atom_keys.(to_atom_keys, large_term)
+
 fields = ~w(/id /site/domain /site/page /site/publisher/id /site/cat
             /device/devicetype /device/ua /device/ip /device/geo/country
             /device/geo/lat /device/connectiontype /user/id /imp /regs/coppa)
@@ -81,6 +94,8 @@ encode = fn ->
   Torque.encode_to_iodata(large_term)
   Torque.encode!(small_proplist)
   Torque.encode!(large_proplist)
+  Torque.encode!(small_atoms)
+  Torque.encode!(large_atoms)
 end
 
 parse_get = fn ->

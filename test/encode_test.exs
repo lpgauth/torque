@@ -177,6 +177,32 @@ defmodule Torque.EncodeTest do
       assert %{^wide => 1} = Jason.decode!(json)
     end
 
+    test "atoms sharing a name-cache slot keep their own names" do
+      # More distinct atoms than the encoder caches, each written as a key and
+      # a value, and the whole map twice: every slot is overwritten while its
+      # previous atom is still being encoded. A map this size is a hash map,
+      # whose member order the NIF iterator and Elixir need not share, so the
+      # names are checked through a decode.
+      atoms = for i <- 1..2_000, do: String.to_atom("torque_cache_probe_#{i}")
+      term = Map.new(atoms, &{&1, &1})
+      expected = Map.new(atoms, &{Atom.to_string(&1), Atom.to_string(&1)})
+
+      for _ <- 1..2 do
+        assert {:ok, json} = Torque.encode(term)
+        assert Jason.decode!(json) == expected
+      end
+    end
+
+    # The cache outlives a call, but which atom means JSON null is chosen per
+    # call: a name cached while `null` was an ordinary atom must not leak
+    # into a call where it is JSON null, or the other way round.
+    test "a cached atom name does not decide which atom is null" do
+      for _ <- 1..2 do
+        assert {:ok, ~s(["null",null])} = Torque.encode([:null, nil])
+        assert {:ok, ~s([null,"nil"])} = Torque.Native.encode_opts([:null, nil], :null)
+      end
+    end
+
     test "improper list returns error" do
       assert {:error, :unsupported_type} = Torque.encode([1 | 2])
       assert {:error, :unsupported_type} = Torque.encode(%{"a" => [1 | 2]})
