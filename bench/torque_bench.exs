@@ -355,18 +355,26 @@ IO.puts("\n=== ENCODE BENCHMARK ===\n")
 
 Benchee.run(
   %{
-    "jason [map() :: binary()]" => fn -> Jason.encode!(bid_response) end,
-    "jason [map() :: iodata()]" => fn -> Jason.encode_to_iodata!(bid_response) end,
-    "jiffy [map() :: iodata()]" => fn -> :jiffy.encode(bid_response) end,
-    "jiffy [proplist() :: iodata()]" => fn ->
+    "jason encode!/1 (map, atom keys)" => fn -> Jason.encode!(bid_response) end,
+    "jason encode_to_iodata!/1 (map, atom keys)" => fn ->
+      Jason.encode_to_iodata!(bid_response)
+    end,
+    "jiffy encode/1 (map, atom keys)" => fn -> :jiffy.encode(bid_response) end,
+    "jiffy encode/2 (proplist, atom keys)" => fn ->
       :jiffy.encode(bid_response_proplist, [:force_utf8])
     end,
-    "otp json [map() :: iodata()]" => fn -> :json.encode(bid_response) end,
-    "glazer [map() :: binary()]" => fn -> :glazer_json.encode(bid_response, [:force_utf8]) end,
-    "torque [map() :: binary()]" => fn -> Torque.encode!(bid_response) end,
-    "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(bid_response) end,
-    "torque [proplist() :: binary()]" => fn -> Torque.encode!(bid_response_proplist) end,
-    "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(bid_response_proplist) end
+    "otp json json:encode/1 (map, atom keys)" => fn -> :json.encode(bid_response) end,
+    "glazer encode/2 (map, atom keys)" => fn ->
+      :glazer_json.encode(bid_response, [:force_utf8])
+    end,
+    "torque encode!/1 (map, atom keys)" => fn -> Torque.encode!(bid_response) end,
+    "torque encode_to_iodata/1 (map, atom keys)" => fn ->
+      Torque.encode_to_iodata(bid_response)
+    end,
+    "torque encode!/1 (proplist, atom keys)" => fn -> Torque.encode!(bid_response_proplist) end,
+    "torque encode_to_iodata/1 (proplist, atom keys)" => fn ->
+      Torque.encode_to_iodata(bid_response_proplist)
+    end
   },
   warmup: 2,
   time: 5,
@@ -383,18 +391,24 @@ IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
 
 Benchee.run(
   %{
-    "jason [map() :: binary()]" => fn -> Jason.encode!(large_decoded_json) end,
-    "jason [map() :: iodata()]" => fn -> Jason.encode_to_iodata!(large_decoded_json) end,
-    "jiffy [map() :: iodata()]" => fn -> :jiffy.encode(large_decoded_json) end,
-    "jiffy [proplist() :: iodata()]" => fn -> :jiffy.encode(large_decoded_proplist) end,
-    "otp json [map() :: iodata()]" => fn -> :json.encode(large_decoded_json) end,
-    "glazer [map() :: binary()]" => fn ->
+    "jason encode!/1 (map, binary keys)" => fn -> Jason.encode!(large_decoded_json) end,
+    "jason encode_to_iodata!/1 (map, binary keys)" => fn ->
+      Jason.encode_to_iodata!(large_decoded_json)
+    end,
+    "jiffy encode/1 (map, binary keys)" => fn -> :jiffy.encode(large_decoded_json) end,
+    "jiffy encode/1 (proplist, binary keys)" => fn -> :jiffy.encode(large_decoded_proplist) end,
+    "otp json json:encode/1 (map, binary keys)" => fn -> :json.encode(large_decoded_json) end,
+    "glazer encode/2 (map, binary keys)" => fn ->
       :glazer_json.encode(large_decoded_json, [:force_utf8])
     end,
-    "torque [map() :: binary()]" => fn -> Torque.encode!(large_decoded_json) end,
-    "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
-    "torque [proplist() :: binary()]" => fn -> Torque.encode!(large_decoded_proplist) end,
-    "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_proplist) end
+    "torque encode!/1 (map, binary keys)" => fn -> Torque.encode!(large_decoded_json) end,
+    "torque encode_to_iodata/1 (map, binary keys)" => fn ->
+      Torque.encode_to_iodata(large_decoded_json)
+    end,
+    "torque encode!/1 (proplist, binary keys)" => fn -> Torque.encode!(large_decoded_proplist) end,
+    "torque encode_to_iodata/1 (proplist, binary keys)" => fn ->
+      Torque.encode_to_iodata(large_decoded_proplist)
+    end
   },
   warmup: 2,
   time: 5,
