@@ -1078,6 +1078,25 @@ defmodule Torque.PointerTest do
       assert retained < 4096, "a 100-byte field kept #{retained} bytes of input alive"
     end
 
+    # A repeated pointer returns the same string, so it must not count again
+    # toward the borrow threshold.
+    test "repeating a pointer does not make a field keep the input alive" do
+      s = String.duplicate("y", 1_000)
+      # Under a quarter of the ~10 KB input once, over it four times.
+      json = ~s({"pad":"#{String.duplicate("x", 9_000)}","s":"#{s}"})
+
+      for ptrs <- [["/s"], List.duplicate("/s", 4)] do
+        assert {:ok, results} = Torque.parse_get_many_nil(json, Torque.compile_pointers(ptrs))
+
+        for got <- results do
+          assert got == s
+
+          assert :binary.referenced_byte_size(got) == byte_size(s),
+                 "#{length(ptrs)} pointers pin the input"
+        end
+      end
+    end
+
     test "a container taken from a large input is copied and decoded intact" do
       long = String.duplicate("m", 80)
 

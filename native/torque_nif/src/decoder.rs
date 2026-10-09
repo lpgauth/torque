@@ -606,11 +606,14 @@ fn do_parse_get_many_nil<'a>(
             let null = compiled.null.as_c_arg();
             let missing = compiled.missing.as_c_arg();
             // Decided once for the batch, so a result list is either all
-            // borrowed or all copied.
+            // borrowed or all copied. A repeated path's string is the same
+            // bytes as its first occurrence's, so it counts once.
             let borrow = borrow_input(bytes.len(), || {
                 values
                     .iter()
-                    .map(|v| match v {
+                    .enumerate()
+                    .filter(|&(slot, _)| !compiled.plan.is_repeat(slot))
+                    .map(|(_, v)| match v {
                         Some(Extracted::Str(s)) => s.len(),
                         _ => 0,
                     })

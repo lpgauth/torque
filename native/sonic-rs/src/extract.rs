@@ -146,6 +146,12 @@ impl ExtractPlan {
         self.has_aliases |= *terminal as usize != slot;
     }
 
+    /// Whether `slot`'s path repeats an earlier one, whose result it shares.
+    #[inline]
+    pub fn is_repeat(&self, slot: usize) -> bool {
+        self.result_slots[slot] != slot
+    }
+
     /// Prepares forward array walks and releases construction slack. Extraction
     /// also accepts unfinished plans, and paths may still be added afterwards.
     pub fn finish(&mut self) {
