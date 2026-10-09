@@ -377,3 +377,30 @@ Benchee.run(
     {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
   ]
 )
+
+IO.puts("\n=== EXTRACT BENCHMARK ===\n")
+
+# Scalars stay on the extractor's own path; a selected container with no
+# deeper pointer goes through the term builder.
+pointers = Torque.compile_pointers(fields)
+scalar_pointers = Torque.compile_pointers(fields -- ["/site/cat", "/user/ext/eids", "/imp"])
+root_pointer = Torque.compile_pointers([""])
+
+Benchee.run(
+  %{
+    "torque parse_get_many_nil" => fn -> Torque.parse_get_many_nil(sample_json, pointers) end,
+    "torque parse_get_many_nil (scalars)" => fn ->
+      Torque.parse_get_many_nil(sample_json, scalar_pointers)
+    end,
+    "torque parse_get_many_nil (large root)" => fn ->
+      Torque.parse_get_many_nil(large_json, root_pointer)
+    end
+  },
+  warmup: 2,
+  time: 5,
+  memory_time: 2,
+  percentiles: [50, 95, 99],
+  formatters: [
+    {Benchee.Formatters.Console, percentiles: [50, 95, 99]}
+  ]
+)

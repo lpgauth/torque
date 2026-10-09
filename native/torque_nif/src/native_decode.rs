@@ -19,7 +19,7 @@ use std::cell::RefCell;
 
 use crate::atoms;
 use crate::decoder::parse_error_term;
-use crate::nif_util::{make_map, make_tuple2, FLATMAP_LIMIT};
+use crate::nif_util::{make_tuple2, map_last_wins, try_make_map, FLATMAP_LIMIT};
 use crate::types::MAX_DEPTH;
 
 /// Cap on each retained thread-local buffer, so a one-off huge document
@@ -27,11 +27,13 @@ use crate::types::MAX_DEPTH;
 /// the encoder's `BUF_RETAIN_CAP`.
 const RETAIN_CAP_BYTES: usize = 1 << 20;
 
-#[inline]
-fn cap_retained<T>(buf: &mut Vec<T>) {
+/// Empties a stack and caps its capacity. Emptying first matters: `shrink_to`
+/// cannot go below the length, and a build can leave any number of roots.
+fn release<T>(stack: &mut Vec<T>) {
+    stack.clear();
     let max = RETAIN_CAP_BYTES / std::mem::size_of::<T>();
-    if buf.capacity() > max {
-        buf.shrink_to(max);
+    if stack.capacity() > max {
+        stack.shrink_to(max);
     }
 }
 
@@ -169,8 +171,6 @@ struct InputRef {
     term: ERL_NIF_TERM,
     base: *const u8,
     len: usize,
-    /// Whether strings may be sub-binaries of `term`; otherwise they are copied.
-    borrow: bool,
 }
 
 impl InputRef {
@@ -185,9 +185,26 @@ impl InputRef {
     }
 }
 
-struct TermBuilder<'a, 'b> {
+/// How the builder spells a string that lies inside the input binary.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Strings {
+    /// A sub-binary of the input, which may keep the input alive.
+    Borrow,
+    /// A fresh binary.
+    Copy,
+}
+
+pub(crate) struct TermBuilder<'a, 'b> {
     env: Env<'a>,
     input: InputRef,
+    strings: Strings,
+    /// Bytes of strings borrowed from the input. Recent ERTS releases copy
+    /// the short ones onto the heap, but they still count: the budget weighs
+    /// what the results hold against the input they may keep alive.
+    borrowed: usize,
+    /// An object built so far lost members to a later duplicate key, so
+    /// `borrowed` counts strings no result holds.
+    dropped_members: bool,
     /// Postfix value stack: completed terms plus the open containers' children.
     /// Borrowed from a reused thread-local buffer (see `DECODE_BUFS`).
     values: &'b mut Vec<ERL_NIF_TERM>,
@@ -205,18 +222,45 @@ struct TermBuilder<'a, 'b> {
 }
 
 impl<'a, 'b> TermBuilder<'a, 'b> {
+    /// Terms of the values parsed so far, in order. Each parse driven through
+    /// the builder leaves exactly one.
+    #[inline]
+    pub(crate) fn roots(&self) -> &[ERL_NIF_TERM] {
+        debug_assert!(self.frames.is_empty());
+        self.values
+    }
+
+    /// Bytes of input strings borrowed so far.
+    #[inline]
+    pub(crate) fn borrowed(&self) -> usize {
+        self.borrowed
+    }
+
+    /// Whether a duplicate key discarded built members, leaving `borrowed`
+    /// and any span or node count of the containers above what survives.
+    #[inline]
+    pub(crate) fn dropped_members(&self) -> bool {
+        self.dropped_members
+    }
+
+    #[inline]
+    pub(crate) fn set_strings(&mut self, strings: Strings) {
+        self.strings = strings;
+    }
+
     #[inline]
     fn push(&mut self, term: ERL_NIF_TERM) {
         self.values.push(term);
     }
 
-    /// Sub-binary (zero-copy) when borrowing is allowed and the str lives in the
-    /// input buffer, else copy (escaped strings are unescaped into the parser's
-    /// scratch buffer).
+    /// Sub-binary (zero-copy) when the str lives in the input buffer and the
+    /// builder borrows, else copy (escaped strings are unescaped into the
+    /// parser's scratch buffer).
     #[inline]
-    fn str_term(&self, s: &str) -> ERL_NIF_TERM {
-        if self.input.borrow {
+    fn str_term(&mut self, s: &str) -> ERL_NIF_TERM {
+        if self.strings == Strings::Borrow {
             if let Some(offset) = self.input.offset_within(s) {
+                self.borrowed += s.len();
                 return unsafe {
                     enif_make_sub_binary(self.env.as_c_arg(), self.input.term, offset, s.len())
                 };
@@ -321,14 +365,15 @@ fn member_order(ords: &[KeyOrd]) -> Option<[u8; FLATMAP_LIMIT]> {
 }
 
 /// Build a map term from an object's keys and values, ordering its members
-/// first when ERTS would otherwise sort them itself.
+/// first when ERTS would otherwise sort them itself. `None` when a key
+/// repeats.
 #[inline]
 fn build_map(
     env: Env,
     keys: &[ERL_NIF_TERM],
     vals: &[ERL_NIF_TERM],
     ords: &[KeyOrd],
-) -> ERL_NIF_TERM {
+) -> Option<ERL_NIF_TERM> {
     let pairs = keys.len();
     if (MIN_ORDERED_MEMBERS..=FLATMAP_LIMIT).contains(&pairs) {
         if let Some(perm) = member_order(ords) {
@@ -338,10 +383,10 @@ fn build_map(
                 k[slot] = keys[i as usize];
                 v[slot] = vals[i as usize];
             }
-            return make_map(env, &k[..pairs], &v[..pairs]);
+            return try_make_map(env, &k[..pairs], &v[..pairs]);
         }
     }
-    make_map(env, keys, vals)
+    try_make_map(env, keys, vals)
 }
 
 // Erlang External Term Format tags for arbitrary-precision integers.
@@ -458,8 +503,8 @@ impl<'de, 'a, 'b> JsonVisitor<'de> for TermBuilder<'a, 'b> {
         true
     }
 
-    /// Integer literal beyond i64/u64 range: build an exact Erlang bignum from
-    /// the raw digits instead of degrading to a lossy f64.
+    /// Integer literal beyond i64/u64 range: an exact Erlang bignum from the
+    /// raw digits.
     #[inline]
     fn visit_overflow_int(&mut self, raw: &str, as_f64: f64) -> bool {
         let t = bignum_term(self.env, raw)
@@ -556,12 +601,15 @@ impl<'de, 'a, 'b> JsonVisitor<'de> for TermBuilder<'a, 'b> {
             None => return false,
         };
         let start = frame.values;
-        let map = build_map(
-            self.env,
-            &self.key_terms[frame.ords..],
-            &self.values[start..],
-            &self.ords[frame.ords..],
-        );
+        let keys = &self.key_terms[frame.ords..];
+        let vals = &self.values[start..];
+        let map = match build_map(self.env, keys, vals, &self.ords[frame.ords..]) {
+            Some(map) => map,
+            None => {
+                self.dropped_members = true;
+                map_last_wins(self.env, keys, vals)
+            }
+        };
         self.key_terms.truncate(frame.ords);
         self.ords.truncate(frame.ords);
         self.values.truncate(start);
@@ -570,68 +618,23 @@ impl<'de, 'a, 'b> JsonVisitor<'de> for TermBuilder<'a, 'b> {
     }
 }
 
-/// Decodes a whole document. With `borrow`, strings the parser did not have to
-/// unescape are sub-binaries of `input_term`; otherwise every string is copied.
-/// JSON null becomes `null`.
-pub fn decode_to_term<'a>(
+/// Runs `f` with a term builder over the binary `input_term`, whose bytes are
+/// `bytes`, on this scheduler thread's reused stacks and key cache. JSON null
+/// becomes `null`.
+pub(crate) fn with_term_builder<'a, R>(
     env: Env<'a>,
     input_term: ERL_NIF_TERM,
     bytes: &[u8],
-    borrow: bool,
+    strings: Strings,
     null: ERL_NIF_TERM,
-) -> Term<'a> {
+    f: impl for<'b> FnOnce(&mut TermBuilder<'a, 'b>) -> R,
+) -> R {
     let input = InputRef {
         term: input_term,
         base: bytes.as_ptr(),
         len: bytes.len(),
-        borrow,
     };
-    match decode_with(env, input, bytes, null) {
-        Ok(Some(root)) => make_tuple2(env, atoms::ok().as_c_arg(), root),
-        Ok(None) => make_tuple2(
-            env,
-            atoms::error().as_c_arg(),
-            "empty document".encode(env).as_c_arg(),
-        ),
-        Err(Failure::TooDeep) => make_tuple2(
-            env,
-            atoms::error().as_c_arg(),
-            atoms::nesting_too_deep().as_c_arg(),
-        ),
-        Err(Failure::Parse(e)) => parse_error_term(env, &e),
-    }
-}
 
-/// Decodes `span`, a validated JSON value lying inside `input`, to a term.
-/// Strings become sub-binaries of `input_term` only when `borrow` allows it.
-pub fn decode_span<'a>(
-    env: Env<'a>,
-    input_term: ERL_NIF_TERM,
-    input: &[u8],
-    span: &[u8],
-    borrow: bool,
-    null: ERL_NIF_TERM,
-) -> Option<ERL_NIF_TERM> {
-    let input = InputRef {
-        term: input_term,
-        base: input.as_ptr(),
-        len: input.len(),
-        borrow,
-    };
-    decode_with(env, input, span, null).ok().flatten()
-}
-
-enum Failure {
-    TooDeep,
-    Parse(sonic_rs::Error),
-}
-
-fn decode_with(
-    env: Env,
-    input: InputRef,
-    bytes: &[u8],
-    null: ERL_NIF_TERM,
-) -> Result<Option<ERL_NIF_TERM>, Failure> {
     DECODE_BUFS.with(|cell| {
         let mut bufs = cell.borrow_mut();
         let DecodeBufs {
@@ -641,6 +644,9 @@ fn decode_with(
             ords,
             keys,
         } = &mut *bufs;
+        // Emptied on entry as well as on exit: where panics unwind (debug
+        // builds; release aborts), rustler catches one out of `f`, skipping
+        // the release below and leaving the next build a dead env's terms.
         values.clear();
         frames.clear();
         key_terms.clear();
@@ -649,6 +655,9 @@ fn decode_with(
         let mut builder = TermBuilder {
             env,
             input,
+            strings,
+            borrowed: 0,
+            dropped_members: false,
             values,
             frames,
             key_terms,
@@ -657,16 +666,54 @@ fn decode_with(
             null,
             too_deep: false,
         };
-
-        let result = match sonic_rs::parse_into_visitor(bytes, &mut builder) {
-            Ok(()) => Ok(builder.values.first().copied()),
-            Err(_) if builder.too_deep => Err(Failure::TooDeep),
-            Err(e) => Err(Failure::Parse(e)),
-        };
-
-        cap_retained(builder.values);
-        cap_retained(builder.key_terms);
-        cap_retained(builder.ords);
+        let result = f(&mut builder);
+        // The terms live in the environment; the handles here are dead now.
+        release(builder.values);
+        release(builder.frames);
+        release(builder.key_terms);
+        release(builder.ords);
         result
+    })
+}
+
+/// Build the `{:error, _}` term for a failed parse through `builder`.
+pub(crate) fn builder_error_term<'a>(
+    env: Env<'a>,
+    builder: &TermBuilder,
+    err: &sonic_rs::Error,
+) -> Term<'a> {
+    if builder.too_deep {
+        make_tuple2(
+            env,
+            atoms::error().as_c_arg(),
+            atoms::nesting_too_deep().as_c_arg(),
+        )
+    } else {
+        parse_error_term(env, err)
+    }
+}
+
+/// Decodes a whole document. With `Strings::Borrow`, strings the parser did
+/// not have to unescape are sub-binaries of `input_term`; with
+/// `Strings::Copy`, every string is copied. JSON null becomes `null`.
+pub fn decode_to_term<'a>(
+    env: Env<'a>,
+    input_term: ERL_NIF_TERM,
+    bytes: &[u8],
+    strings: Strings,
+    null: ERL_NIF_TERM,
+) -> Term<'a> {
+    with_term_builder(env, input_term, bytes, strings, null, |builder| {
+        match sonic_rs::parse_into_visitor(bytes, builder) {
+            Ok(()) => match builder.values.first() {
+                Some(&root) => make_tuple2(env, atoms::ok().as_c_arg(), root),
+                None => make_tuple2(
+                    env,
+                    atoms::error().as_c_arg(),
+                    "empty document".encode(env).as_c_arg(),
+                ),
+            },
+            Err(e) => builder_error_term(env, builder, &e),
+        }
     })
 }

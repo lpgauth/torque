@@ -674,6 +674,40 @@ defmodule Torque.PointerTest do
     end
   end
 
+  # Which route extraction builds a value by (a `Value` or the term builder)
+  # depends on the other pointers asked for, so it must not show.
+  describe "parse_get_many_nil/2 integers past 64 bits" do
+    test "adding a pointer does not change another pointer's answer" do
+      big = 18_446_744_073_709_551_617
+      # The long string makes the padded case go through the copying rebuild.
+      inner = ~s({"n":#{big},"m":[-#{big}],"s":"#{String.duplicate("u", 100)}"})
+
+      for pad <- ["", String.duplicate("x", 8_000)] do
+        json = ~s({"pad":"#{pad}","a":#{inner},"n":#{big}})
+        {:ok, doc} = Torque.parse(json)
+
+        for paths <- [["/a"], ["/a", "/a/missing"], ["/a", "/a/n"], ["/a/m", "/n"], ["/n", "/a"]],
+            opts <- [[], [validate: false], [unique_keys: true]] do
+          expected = Torque.get_many_nil(doc, paths)
+
+          assert {:ok, ^expected} =
+                   Torque.parse_get_many_nil(json, Torque.compile_pointers(paths, opts)),
+                 "#{inspect(paths)} #{inspect(opts)} on #{byte_size(json)} bytes"
+
+          alone =
+            for path <- paths do
+              {:ok, [value]} =
+                Torque.parse_get_many_nil(json, Torque.compile_pointers([path], opts))
+
+              value
+            end
+
+          assert alone == expected, "#{inspect(paths)} #{inspect(opts)} answered alone"
+        end
+      end
+    end
+  end
+
   describe "parse_get_many_nil/2 skipped regions" do
     test "a fault outside every selected path is still reported" do
       ptrs = Torque.compile_pointers(["/keep"])
@@ -1115,6 +1149,59 @@ defmodule Torque.PointerTest do
         assert {:ok, [recs]} = Torque.parse_get_many_nil(json, ptrs)
         assert recs == Torque.decode!(records)
         assert Enum.all?(recs, &(:binary.referenced_byte_size(&1["mid"]) == 80))
+      end
+    end
+
+    # Containers are built before the batch knows whether it may borrow, so a
+    # small one from a large input is rebuilt with copies. Before OTP 27 a
+    # sub-binary of any length references its source, hence the short strings.
+    test "a small container taken from a large input does not keep it alive" do
+      ptrs = Torque.compile_pointers(["/device", "/n"])
+
+      for len <- [3, 63, 64, 65, 100] do
+        device = %{"ua" => String.duplicate("u", len), "esc" => "a\"b", "ids" => [1]}
+        pad = String.duplicate("x", 400_000)
+        json = Jason.encode!(%{"pad" => pad, "device" => device, "n" => 7})
+
+        assert {:ok, [^device, 7] = [%{"ua" => ua}, _]} = Torque.parse_get_many_nil(json, ptrs)
+        assert :binary.referenced_byte_size(ua) < 4096, "#{len}-byte field pins the input"
+      end
+    end
+
+    # A repeated pointer shares its first occurrence's term, so it must not
+    # count that container's span again toward the borrow threshold.
+    test "repeating a pointer does not make a container keep the input alive" do
+      ua = String.duplicate("u", 100)
+      # ~42 KB of a ~450 KB input: under a quarter once, over it four times.
+      device = %{"ua" => ua, "fill" => List.duplicate("item", 6_000)}
+      json = Jason.encode!(%{"pad" => String.duplicate("x", 400_000), "device" => device})
+
+      for ptrs <- [["/device"], ["/device", "/device", "/device", "/device"]] do
+        assert {:ok, results} = Torque.parse_get_many_nil(json, Torque.compile_pointers(ptrs))
+
+        for %{"ua" => got} <- results do
+          assert got == ua
+
+          assert :binary.referenced_byte_size(got) < 4096,
+                 "#{length(ptrs)} pointers pin the input"
+        end
+      end
+    end
+
+    # The batch counts a selected container by its span, which includes the
+    # members a duplicate key dropped from its map.
+    test "members a duplicate key drops do not keep the input alive" do
+      ua = String.duplicate("v", 100)
+
+      json =
+        ~s({"pad":"#{String.duplicate("x", 400_000)}","device":) <>
+          ~s({"ua":"#{String.duplicate("u", 150_000)}","ua":"#{ua}"}})
+
+      for validate <- [true, false] do
+        ptrs = Torque.compile_pointers(["/device"], validate: validate)
+        assert {:ok, [%{"ua" => got} = device]} = Torque.parse_get_many_nil(json, ptrs)
+        assert device == %{"ua" => ua}
+        assert :binary.referenced_byte_size(got) < 4096, "a dropped member pins the input"
       end
     end
   end

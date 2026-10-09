@@ -80,6 +80,12 @@ compiled_idx = Torque.compile_pointers(indexed_fields)
 # Train structural skipping as well as fully validated extraction.
 compiled_fast = Torque.compile_pointers(fields, unique_keys: true, validate: false)
 
+# A selected container with no deeper pointer is built through the term
+# builder during the walk; train that on the large document's containers too.
+large_fields = ~w(/statuses /statuses/1/user /search_metadata /statuses/2/text)
+compiled_large = Torque.compile_pointers(large_fields)
+compiled_root = Torque.compile_pointers([""])
+
 IO.puts("PGO workload: small=#{byte_size(small_json)}B large=#{byte_size(large_json)}B")
 
 decode = fn ->
@@ -121,9 +127,17 @@ compiled_get = fn ->
   Torque.get_many_nil(doc, compiled)
 end
 
+large_extract = fn ->
+  {:ok, _} = Torque.parse_get_many_nil(large_json, compiled_large)
+  {:ok, _} = Torque.parse_get_many_nil(large_json, compiled_root)
+end
+
 Enum.each(1..5_000, fn _ -> decode.() end)
 Enum.each(1..5_000, fn _ -> encode.() end)
 Enum.each(1..10_000, fn _ -> parse_get.() end)
 Enum.each(1..10_000, fn _ -> compiled_get.() end)
+# Kept light: weighted much heavier, a large-document pass pushes the encoder
+# out of the profile's hot set and changes its codegen.
+Enum.each(1..500, fn _ -> large_extract.() end)
 
 IO.puts("PGO workload complete")

@@ -11,10 +11,9 @@
 #     the DOM builder keeps them as raw-number nodes and `extract` returns
 #     them as `Extracted::BigInt`, so lookups stay exact too. Integer tokens
 #     too large even for `f64` fail `parse_number`; the visitor and `extract`
-#     recover their digits from that error branch (`Parser::huge_int`) and a
-#     selected container that fails its checked skip is rebuilt as a `Value`.
-#     The checked skip itself still rejects them: accepting them there cost
-#     ~10% on number-heavy documents
+#     recover their digits from that error branch (`Parser::huge_int`). The
+#     checked skip still rejects them in unselected regions: accepting them
+#     there cost ~10% on number-heavy documents
 #   * object keys in the visitor parse (`parse_object`) are delivered via
 #     `visit_key`/`visit_borrowed_key` instead of the str hooks (defaults
 #     forward to the str hooks), so Torque can reuse the term for a key
@@ -26,7 +25,8 @@
 #   * `Error::is_recursion_limit` so the NIF can classify the nesting-limit
 #     error without matching its message
 #   * `extract` module: one-pass extraction of a compiled path set that
-#     builds values only where a path ends and skips the rest;
+#     builds values only where a path ends and skips the rest; `extract_with`
+#     parses selected containers through a caller's `JsonVisitor` instead, and
 #     `ExtractPlan::is_repeat` tells a repeated path's shared slot apart
 #   * `Read` caches the pinned input's slice pointer: resolving it through the
 #     `PinnedInput` enum stopped inlining inside the skip paths

@@ -68,12 +68,29 @@ pub unsafe fn map_from_arrays(
 /// inserting the members in order, so the last value for a key wins.
 #[inline]
 pub fn make_map(env: Env, keys: &[ERL_NIF_TERM], vals: &[ERL_NIF_TERM]) -> ERL_NIF_TERM {
+    try_make_map(env, keys, vals).unwrap_or_else(|| map_last_wins(env, keys, vals))
+}
+
+/// `make_map` without the fallback: `None` when a key repeats.
+#[inline]
+pub fn try_make_map(
+    env: Env,
+    keys: &[ERL_NIF_TERM],
+    vals: &[ERL_NIF_TERM],
+) -> Option<ERL_NIF_TERM> {
+    let mut map: ERL_NIF_TERM = 0;
+    // SAFETY: `keys` and `vals` are live slices of `keys.len()` terms.
+    unsafe { map_from_arrays(env, keys.as_ptr(), vals.as_ptr(), keys.len(), &mut map) }
+        .then_some(map)
+}
+
+/// Map of an object whose keys repeat: members inserted in source order, so
+/// the last value for a key wins.
+#[cold]
+#[inline(never)]
+pub fn map_last_wins(env: Env, keys: &[ERL_NIF_TERM], vals: &[ERL_NIF_TERM]) -> ERL_NIF_TERM {
     unsafe {
-        let mut map: ERL_NIF_TERM = 0;
-        if map_from_arrays(env, keys.as_ptr(), vals.as_ptr(), keys.len(), &mut map) {
-            return map;
-        }
-        map = enif_make_new_map(env.as_c_arg());
+        let mut map = enif_make_new_map(env.as_c_arg());
         for (&key, &val) in keys.iter().zip(vals) {
             let mut new_map: ERL_NIF_TERM = 0;
             enif_make_map_put(env.as_c_arg(), map, key, val, &mut new_map);

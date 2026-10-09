@@ -15,13 +15,13 @@ use ahash::AHashMap;
 use sonic_number::ParserNumber;
 
 use crate::{
-    error::{Error, ErrorCode, Result},
+    error::{ErrorCode, Result},
     parser::Reference,
     parser::{is_integer_token, restore_neg_zero, Parser, MAX_PARSE_DEPTH},
     reader::{Read, Reader},
     util::utf8::from_utf8,
     value::shared::Shared,
-    JsonInput, JsonValueTrait, Value,
+    JsonInput, JsonValueTrait, JsonVisitor, Value,
 };
 
 /// Compiled pointer segment. Numeric tokens retain object-key and array-index
@@ -234,7 +234,8 @@ impl ExtractPlan {
 }
 
 /// Extracted value. Unescaped strings may borrow the input, scalars are
-/// returned bare, and containers own their storage through `Value`.
+/// returned bare, and containers own their storage through `Value` unless a
+/// visitor built them.
 #[derive(Debug, Clone)]
 pub enum Extracted<'de> {
     /// Bytes inside the input, valid UTF-8, no escapes.
@@ -247,12 +248,16 @@ pub enum Extracted<'de> {
     Null,
     /// An integer literal outside the i64/u64 range, as its digits.
     BigInt(&'de str),
-    /// A selected container, already validated, as its JSON text. Callers
-    /// decode it themselves rather than pay for a `Value` arena.
-    Raw(&'de [u8]),
     /// Containers some longer path descends into, and strings that had to be
     /// unescaped into scratch space.
     Value(Value),
+    /// A container [`extract_with`] parsed through the caller's visitor, which
+    /// saw it as its `root`-th document. It spans `start..end` of the input.
+    Visited {
+        root: usize,
+        start: usize,
+        end: usize,
+    },
 }
 
 /// Extracts every planned path in insertion order. Missing paths return `None`.
@@ -262,7 +267,29 @@ pub fn extract<'de, Input: JsonInput<'de>>(
     validate: Validate,
     keys: Keys,
 ) -> Result<Vec<Option<Extracted<'de>>>> {
-    let mut out = extract_unique(json, plan, validate, keys)?;
+    expand(plan, extract_unique(json, plan, validate, keys, Arena)?)
+}
+
+/// Like [`extract`], but a selected container with no planned descendants is
+/// parsed through `visitor`, one visitor document per container, and reported
+/// as [`Extracted::Visited`]. Containers that other paths descend into are
+/// still built as `Value`s.
+pub fn extract_with<'de, Input: JsonInput<'de>, V: JsonVisitor<'de>>(
+    json: Input,
+    plan: &ExtractPlan,
+    validate: Validate,
+    keys: Keys,
+    visitor: &mut V,
+) -> Result<Vec<Option<Extracted<'de>>>> {
+    let containers = Visit { visitor, roots: 0 };
+    expand(plan, extract_unique(json, plan, validate, keys, containers)?)
+}
+
+/// Fills duplicate paths' slots from their canonical slot.
+fn expand<'de>(
+    plan: &ExtractPlan,
+    mut out: Vec<Option<Extracted<'de>>>,
+) -> Result<Vec<Option<Extracted<'de>>>> {
     if !plan.has_aliases {
         return Ok(out);
     }
@@ -274,13 +301,68 @@ pub fn extract<'de, Input: JsonInput<'de>>(
     Ok(out)
 }
 
+/// Builds selected containers that no planned path descends into.
+trait Containers<'de> {
+    fn container<R: Reader<'de>>(
+        &mut self,
+        parser: &mut Parser<R>,
+        strbuf: &mut Vec<u8>,
+        depth: usize,
+    ) -> Result<Extracted<'de>>;
+}
+
+/// Builds containers as arena-backed `Value`s.
+struct Arena;
+
+impl<'de> Containers<'de> for Arena {
+    #[inline]
+    fn container<R: Reader<'de>>(
+        &mut self,
+        parser: &mut Parser<R>,
+        strbuf: &mut Vec<u8>,
+        depth: usize,
+    ) -> Result<Extracted<'de>> {
+        parse_value_in_place(parser, strbuf, depth)
+    }
+}
+
+/// Hands containers to a caller's visitor.
+struct Visit<'v, V> {
+    visitor: &'v mut V,
+    roots: usize,
+}
+
+impl<'de, V: JsonVisitor<'de>> Containers<'de> for Visit<'_, V> {
+    // Out of line: inlining the visitor's parse into `Extractor::value` costs
+    // the scalar path registers, and a container is never cheap enough for
+    // the call to show.
+    #[inline(never)]
+    fn container<R: Reader<'de>>(
+        &mut self,
+        parser: &mut Parser<R>,
+        strbuf: &mut Vec<u8>,
+        depth: usize,
+    ) -> Result<Extracted<'de>> {
+        let start = parser.read.index();
+        parser.parse_dom(self.visitor, Some(strbuf), depth)?;
+        let root = self.roots;
+        self.roots += 1;
+        Ok(Extracted::Visited {
+            root,
+            start,
+            end: parser.read.index(),
+        })
+    }
+}
+
 /// Extracts each plan terminal once. Duplicate paths share a terminal, so only
-/// the canonical slot of each is populated; [`extract`] expands the rest.
-fn extract_unique<'de, Input: JsonInput<'de>>(
+/// the canonical slot of each is populated; [`expand`] fills the rest.
+fn extract_unique<'de, Input: JsonInput<'de>, C: Containers<'de>>(
     json: Input,
     plan: &ExtractPlan,
     validate: Validate,
     keys: Keys,
+    containers: C,
 ) -> Result<Vec<Option<Extracted<'de>>>> {
     let slice = json.to_u8_slice();
     // `Value` stores offsets in `u32`, so enforce the same bound as full parsing.
@@ -300,6 +382,7 @@ fn extract_unique<'de, Input: JsonInput<'de>>(
     let mut ex = Extractor {
         plan,
         out: &mut out,
+        containers,
         checked: validate == Validate::Yes,
         first_wins: keys == Keys::Unique,
         stamps: Vec::new(),
@@ -345,9 +428,10 @@ struct Live {
     next: u32,
 }
 
-struct Extractor<'p, 'o, 'de> {
+struct Extractor<'p, 'o, 'de, C> {
     plan: &'p ExtractPlan,
     out: &'o mut Vec<Option<Extracted<'de>>>,
+    containers: C,
     checked: bool,
     first_wins: bool,
     /// Stamp per plan node, indexed by node id. Empty until a node wider than
@@ -360,7 +444,7 @@ struct Extractor<'p, 'o, 'de> {
     live: Vec<Live>,
 }
 
-impl<'de> Extractor<'_, '_, 'de> {
+impl<'de, C: Containers<'de>> Extractor<'_, '_, 'de, C> {
     /// Prepares duplicate tracking for an object whose plan node has `keys`
     /// planned keys.
     #[inline]
@@ -413,14 +497,11 @@ impl<'de> Extractor<'_, '_, 'de> {
         // A terminal node needs the whole value. Resolve any longer paths from
         // that value when one requested path prefixes another.
         if let Some(slot) = n.slot {
-            let value = if n.keys.is_empty() && matches!(parser.skip_space_peek(), Some(b'{' | b'[')) {
-                let start = parser.read.index();
-                match parser.skip_one_at(true, depth) {
-                    Ok((span, _)) => Extracted::Raw(span),
-                    Err(err) => reparse_container(parser, strbuf, start, depth, err)?,
+            let value = match parser.skip_space_peek() {
+                Some(b'{' | b'[') if n.keys.is_empty() => {
+                    self.containers.container(parser, strbuf, depth)?
                 }
-            } else {
-                parse_value_in_place(parser, strbuf, depth)?
+                _ => parse_value_in_place(parser, strbuf, depth)?,
             };
             if !self.live.is_empty() {
                 self.activate(node);
@@ -682,22 +763,6 @@ fn last_key<'v>(value: &'v Value, key: &str) -> Option<&'v Value> {
         // Hash-map-backed values cannot contain duplicate keys.
         None => value.get(key),
     }
-}
-
-/// A selected container failed the checked skip, which rejects integers too
-/// large for `f64`. Building it instead accepts them, so retry that way and
-/// keep the skip's error if the container is malformed after all.
-#[cold]
-#[inline(never)]
-fn reparse_container<'de, R: Reader<'de>>(
-    parser: &mut Parser<R>,
-    strbuf: &mut Vec<u8>,
-    start: usize,
-    depth: usize,
-    err: Error,
-) -> Result<Extracted<'de>> {
-    parser.read.set_index(start);
-    parse_value_in_place(parser, strbuf, depth).map_err(|_| err)
 }
 
 /// Parses the current value in place. Scalars are built directly, unescaped
