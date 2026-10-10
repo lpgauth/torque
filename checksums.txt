@@ -1,8 +1,8 @@
-4857b03fab8c2ee8b92e9cb6d8a25dc9f83e6ab8c0c6b6aff536634963f3a9ca  libtorque_nif-v0.5.0-nif-2.15-aarch64-apple-darwin.so.tar.gz
-78f23336f2782ee7042a74db355e84fc800f01b5fe8063bfddf5f37a833ca9d8  libtorque_nif-v0.5.0-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz
-250e54a4a746a47d8c1faadf2741a33cd2f919c7716e676127c609e5d875ce0a  libtorque_nif-v0.5.0-nif-2.15-x86_64-apple-darwin--v2.so.tar.gz
-d117c0ff4d00e4683875b19885bf19ab581a6e03a0f7479eaa820fcf5b7f71f2  libtorque_nif-v0.5.0-nif-2.15-x86_64-apple-darwin--v3.so.tar.gz
-87c957ad524d26cfb362ed090a0d2866e7e4f0b3e7d397dbfb89749dcc8faaf9  libtorque_nif-v0.5.0-nif-2.15-x86_64-apple-darwin.so.tar.gz
-5e645c78ccd16945575e4028940cd792f1398b18de84a8482dbfa584abeb28ac  libtorque_nif-v0.5.0-nif-2.15-x86_64-unknown-linux-gnu--v2.so.tar.gz
-d59d6678310a97dd737c8c9522d211b24e420dc37f879a867a716b5cbdad4e93  libtorque_nif-v0.5.0-nif-2.15-x86_64-unknown-linux-gnu--v3.so.tar.gz
-022a2d769a3faeec49c0485f1a5217cef51d4de057b5d7faa06da5e8a08b5e63  libtorque_nif-v0.5.0-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz
+ab399859dcaeee4089f6a955f65d42317fe2d2d6bd7da9fae368baf250176829  libtorque_nif-v0.5.1-nif-2.15-aarch64-apple-darwin.so.tar.gz
+114f49791f947a36d14a5c9dfc6eab0ff41601702fcf8f5901d2cf026a9892c2  libtorque_nif-v0.5.1-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz
+425fa4900eae4d7f3d6c5eae64e50b94e0e32ecf47921fdd33b36fa74dd463e2  libtorque_nif-v0.5.1-nif-2.15-x86_64-apple-darwin--v2.so.tar.gz
+ad99681f9c0e5369d3a315b6dae84699d8f68aef73c515067425e936dd76bbcd  libtorque_nif-v0.5.1-nif-2.15-x86_64-apple-darwin--v3.so.tar.gz
+8965fbd1b5493b698e6f6691f2fee297732f54d6e2e8bfd6f06f313eba7ec04b  libtorque_nif-v0.5.1-nif-2.15-x86_64-apple-darwin.so.tar.gz
+192f006db0e0421ac6c452dd6487bc6d2642110f863a2f230ff1ea76bb2bec0b  libtorque_nif-v0.5.1-nif-2.15-x86_64-unknown-linux-gnu--v2.so.tar.gz
+44627832b99105378f7c9700bd9da231787a6fc005d18cb0be555c0b3dedf15a  libtorque_nif-v0.5.1-nif-2.15-x86_64-unknown-linux-gnu--v3.so.tar.gz
+6df0d1bff8eb7d18746b20f9c1c56938b03fdfacd36efd06b282b43942c737fd  libtorque_nif-v0.5.1-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz
