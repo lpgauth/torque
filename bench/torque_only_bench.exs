@@ -307,10 +307,14 @@ IO.puts("\n=== ENCODE BENCHMARK ===\n")
 
 Benchee.run(
   %{
-    "torque [map() :: binary()]" => fn -> Torque.encode!(bid_response) end,
-    "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(bid_response) end,
-    "torque [proplist() :: binary()]" => fn -> Torque.encode!(bid_response_proplist) end,
-    "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(bid_response_proplist) end
+    "torque encode!/1 (map, atom keys)" => fn -> Torque.encode!(bid_response) end,
+    "torque encode_to_iodata/1 (map, atom keys)" => fn ->
+      Torque.encode_to_iodata(bid_response)
+    end,
+    "torque encode!/1 (proplist, atom keys)" => fn -> Torque.encode!(bid_response_proplist) end,
+    "torque encode_to_iodata/1 (proplist, atom keys)" => fn ->
+      Torque.encode_to_iodata(bid_response_proplist)
+    end
   },
   warmup: 2,
   time: 5,
@@ -325,10 +329,14 @@ IO.puts("\n=== LARGE JSON ENCODE BENCHMARK ===\n")
 
 Benchee.run(
   %{
-    "torque [map() :: binary()]" => fn -> Torque.encode!(large_decoded_json) end,
-    "torque [map() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_json) end,
-    "torque [proplist() :: binary()]" => fn -> Torque.encode!(large_decoded_proplist) end,
-    "torque [proplist() :: iodata()]" => fn -> Torque.encode_to_iodata(large_decoded_proplist) end
+    "torque encode!/1 (map, binary keys)" => fn -> Torque.encode!(large_decoded_json) end,
+    "torque encode_to_iodata/1 (map, binary keys)" => fn ->
+      Torque.encode_to_iodata(large_decoded_json)
+    end,
+    "torque encode!/1 (proplist, binary keys)" => fn -> Torque.encode!(large_decoded_proplist) end,
+    "torque encode_to_iodata/1 (proplist, binary keys)" => fn ->
+      Torque.encode_to_iodata(large_decoded_proplist)
+    end
   },
   warmup: 2,
   time: 5,
