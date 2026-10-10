@@ -25,7 +25,7 @@ Add to your `mix.exs`:
 ```elixir
 def deps do
   [
-    {:torque, "~> 0.5.0"}
+    {:torque, "~> 0.5.1"}
   ]
 end
 ```
@@ -33,7 +33,7 @@ end
 or, with rebar3, to your `rebar.config` (see [Erlang](#erlang)):
 
 ```erlang
-{deps, [{torque, "~> 0.5.0"}]}.
+{deps, [{torque, "~> 0.5.1"}]}.
 ```
 
 Precompiled binaries are available for macOS and glibc Linux on `aarch64` and `x86_64` (with CPU-optimized variants on `x86_64`, below). Anything else, such as musl (Alpine) or Windows, builds from source: install a stable Rust toolchain and set `TORQUE_BUILD=true`.
