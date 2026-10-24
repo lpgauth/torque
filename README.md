@@ -161,7 +161,17 @@ json = Torque.encode_to_iodata(%{id: "abc"})
 
 # jiffy-compatible proplist format
 {:ok, json} = Torque.encode({[{:id, "abc"}, {:price, 1.5}]})
+
+# Pretty output: two spaces by default, or pass the indent unit
+{:ok, json} = Torque.encode(%{id: "abc"}, pretty: true)
+# "{\n  \"id\": \"abc\"\n}"
+
+{:ok, json} = Torque.encode(%{id: "abc"}, pretty: "\t")
 ```
+
+Indentation comes from the same walk that writes the JSON, so `pretty: true`
+needs no extra pass and no intermediate compact binary to reformat, unlike
+Jason, which pretty-prints its own output. The bytes are the same either way.
 
 Structs are rejected with `{:error, :unhandled_struct}` unless they implement
 `Torque.Encoder`. Implement the protocol for custom types, or derive it to

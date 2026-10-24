@@ -27,7 +27,21 @@ encode_test() ->
     ?assertEqual({ok, <<"[null,\"nil\",true]">>}, torque:encode([null, nil, true])),
     ?assertEqual({ok, <<"{\"k\":null}">>}, torque:encode({[{<<"k">>, null}]})),
     ?assertEqual({ok, <<"[null]">>}, torque:encode([null], [dirty])),
+    ?assertEqual({ok, <<"[\n  null\n]">>}, torque:encode([null], [pretty, {dirty, true}])),
     ?assertEqual({error, unsupported_type}, torque:encode(self())).
+
+encode_pretty_test() ->
+    ?assertEqual(
+        {ok, <<"[\n  null,\n  [\n    1\n  ]\n]">>},
+        torque:encode([null, [1]], [pretty])
+    ),
+    ?assertEqual(
+        {ok, <<"{\n\t\"k\": null\n}">>},
+        torque:encode({[{k, null}]}, [{pretty, <<"\t">>}])
+    ),
+    ?assertEqual({ok, <<"[]">>}, torque:encode([], [pretty])),
+    ?assertEqual({ok, <<"{\"k\":1}">>}, torque:encode({[{k, 1}]}, [{pretty, <<>>}])),
+    ?assertError({invalid_option, {pretty, 1}}, torque:encode(1, [{pretty, 1}])).
 
 lookups_test() ->
     {ok, Doc} = torque:parse(?JSON),

@@ -32,6 +32,11 @@ defmodule Torque do
   binary, or integer keys), lists, binaries, numbers, booleans, `nil`,
   and jiffy-style `{proplist}` tuples.
 
+  Output is compact by default. Pass `pretty: true` for two-space
+  indentation, or an indentation binary such as `pretty: "\t"`. The
+  whitespace is emitted during the same walk that writes the JSON, so no
+  reformatting pass over the result is needed.
+
   Structs are rejected with `{:error, :unhandled_struct}` unless they
   implement `Torque.Encoder` (see the protocol docs for deriving with
   `:only` / `:except`). Torque ships implementations for `Date`, `Time`,
@@ -196,11 +201,16 @@ defmodule Torque do
 
   ## Options
 
-    * `:dirty` — when `true`, runs the encode on a dirty CPU scheduler.
+    * `:dirty`: when `true`, runs the encode on a dirty CPU scheduler.
       Unlike `decode/1`, which dispatches on input byte size, encoding
       cannot cheaply predict its output size up front, so large encodes
       are opt-in. Enable when terms are expected to produce large output
       (more than roughly 20 KB). Defaults to `false`.
+
+    * `:pretty`: `true` indents nested members by two spaces, and a binary
+      uses that binary as the indent unit (tabs, four spaces, ...). The same
+      shape as Jason's: `:` gains a trailing space, each member goes on its
+      own line, and empty containers stay on one line. Defaults to `false`.
 
   Any other option raises `ArgumentError`.
 
@@ -214,6 +224,12 @@ defmodule Torque do
 
       iex> Torque.encode(%{id: "abc"}, dirty: true)
       {:ok, ~s({"id":"abc"})}
+
+      iex> Torque.encode(%{id: "abc", tags: []}, pretty: true)
+      {:ok, ~s|{\\n  "id": "abc",\\n  "tags": []\\n}|}
+
+      iex> Torque.encode(%{id: "abc"}, pretty: "\\t")
+      {:ok, ~s|{\\n\\t"id": "abc"\\n}|}
   """
   @doc group: :encode
   @spec encode(term(), keyword()) ::
@@ -227,18 +243,35 @@ defmodule Torque do
 
   def encode(term, []) do
     case Torque.Native.encode(term) do
-      {:error, :unhandled_struct} -> encode_retry(term, false)
+      {:error, :unhandled_struct} -> encode_retry(term, false, "")
       other -> other
     end
   end
 
   def encode(term, opts) do
-    dirty = Keyword.validate!(opts, dirty: false)[:dirty]
+    {dirty, indent} = encode_options!(opts)
 
-    case encode_native(term, dirty) do
-      {:error, :unhandled_struct} -> encode_retry(term, dirty)
+    case encode_native(term, dirty, indent) do
+      {:error, :unhandled_struct} -> encode_retry(term, dirty, indent)
       other -> other
     end
+  end
+
+  # `:pretty` takes `true` (two spaces) or the indentation binary itself. An
+  # empty indent selects compact output, so `pretty: ""` is compact.
+  defp encode_options!(opts) do
+    validated = Keyword.validate!(opts, dirty: false, pretty: false)
+    {validated[:dirty], indent!(validated[:pretty])}
+  end
+
+  defp indent!(false), do: ""
+  defp indent!(nil), do: ""
+  defp indent!(true), do: "  "
+  defp indent!(indent) when is_binary(indent), do: indent
+
+  defp indent!(other) do
+    raise ArgumentError,
+          "expected :pretty to be true, false, or an indentation binary, got: #{inspect(other)}"
   end
 
   @doc """
@@ -281,23 +314,23 @@ defmodule Torque do
   def encode_to_iodata(term, opts \\ [])
 
   def encode_to_iodata(term, []) do
-    encode_iodata_native(term, false)
+    encode_iodata_native(term, false, "")
   catch
     :error, :unhandled_struct ->
-      encode_iodata_retry(term, false)
+      encode_iodata_retry(term, false, "")
 
     :error, value ->
       raise ArgumentError, "encode error: #{inspect(value)}"
   end
 
   def encode_to_iodata(term, opts) do
-    dirty = Keyword.validate!(opts, dirty: false)[:dirty]
+    {dirty, indent} = encode_options!(opts)
 
     try do
-      encode_iodata_native(term, dirty)
+      encode_iodata_native(term, dirty, indent)
     catch
       :error, :unhandled_struct ->
-        encode_iodata_retry(term, dirty)
+        encode_iodata_retry(term, dirty, indent)
 
       :error, value ->
         raise ArgumentError, "encode error: #{inspect(value)}"
@@ -321,31 +354,42 @@ defmodule Torque do
   @spec encode_to_iodata!(term(), keyword()) :: binary()
   def encode_to_iodata!(term, opts \\ []), do: encode_to_iodata(term, opts)
 
-  defp encode_native(term, dirty) do
-    if dirty, do: Torque.Native.encode_dirty(term), else: Torque.Native.encode(term)
-  end
+  defp encode_native(term, false, ""), do: Torque.Native.encode(term)
+  defp encode_native(term, true, ""), do: Torque.Native.encode_dirty(term)
 
-  defp encode_retry(term, dirty) do
+  defp encode_native(term, false, indent),
+    do: Torque.Native.encode_opts(term, nil, indent)
+
+  defp encode_native(term, true, indent),
+    do: Torque.Native.encode_opts_dirty(term, nil, indent)
+
+  defp encode_retry(term, dirty, indent) do
     case normalize(term) do
-      {:ok, normalized} -> encode_native(normalized, dirty)
+      {:ok, normalized} -> encode_native(normalized, dirty, indent)
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp encode_iodata_native(term, true), do: Torque.Native.encode_iodata_dirty(term)
-  defp encode_iodata_native(term, false), do: Torque.Native.encode_iodata(term)
+  defp encode_iodata_native(term, false, ""), do: Torque.Native.encode_iodata(term)
+  defp encode_iodata_native(term, true, ""), do: Torque.Native.encode_iodata_dirty(term)
+
+  defp encode_iodata_native(term, false, indent),
+    do: Torque.Native.encode_iodata_opts(term, indent)
+
+  defp encode_iodata_native(term, true, indent),
+    do: Torque.Native.encode_iodata_opts_dirty(term, indent)
 
   # Retry path: a struct that still has no protocol implementation fails
   # with the same ArgumentError as every other encode error.
-  defp encode_iodata_retry(term, dirty) do
+  defp encode_iodata_retry(term, dirty, indent) do
     case normalize(term) do
-      {:ok, normalized} -> encode_iodata_native_rescued(normalized, dirty)
+      {:ok, normalized} -> encode_iodata_native_rescued(normalized, dirty, indent)
       {:error, reason} -> raise ArgumentError, "encode error: #{reason}"
     end
   end
 
-  defp encode_iodata_native_rescued(term, dirty) do
-    encode_iodata_native(term, dirty)
+  defp encode_iodata_native_rescued(term, dirty, indent) do
+    encode_iodata_native(term, dirty, indent)
   catch
     :error, value -> raise ArgumentError, "encode error: #{inspect(value)}"
   end

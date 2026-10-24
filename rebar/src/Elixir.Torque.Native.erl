@@ -17,10 +17,12 @@
     decode_opts_dirty/3,
     encode/1,
     encode_dirty/1,
-    encode_opts/2,
-    encode_opts_dirty/2,
+    encode_opts/3,
+    encode_opts_dirty/3,
     encode_iodata/1,
     encode_iodata_dirty/1,
+    encode_iodata_opts/2,
+    encode_iodata_opts_dirty/2,
     get_many_nil/2,
     compile_paths/5,
     get_many_nil_compiled/2,
@@ -46,10 +48,12 @@ decode_opts(_, _, _) -> erlang:nif_error(nif_not_loaded).
 decode_opts_dirty(_, _, _) -> erlang:nif_error(nif_not_loaded).
 encode(_) -> erlang:nif_error(nif_not_loaded).
 encode_dirty(_) -> erlang:nif_error(nif_not_loaded).
-encode_opts(_, _) -> erlang:nif_error(nif_not_loaded).
-encode_opts_dirty(_, _) -> erlang:nif_error(nif_not_loaded).
+encode_opts(_, _, _) -> erlang:nif_error(nif_not_loaded).
+encode_opts_dirty(_, _, _) -> erlang:nif_error(nif_not_loaded).
 encode_iodata(_) -> erlang:nif_error(nif_not_loaded).
 encode_iodata_dirty(_) -> erlang:nif_error(nif_not_loaded).
+encode_iodata_opts(_, _) -> erlang:nif_error(nif_not_loaded).
+encode_iodata_opts_dirty(_, _) -> erlang:nif_error(nif_not_loaded).
 get_many_nil(_, _) -> erlang:nif_error(nif_not_loaded).
 compile_paths(_, _, _, _, _) -> erlang:nif_error(nif_not_loaded).
 get_many_nil_compiled(_, _) -> erlang:nif_error(nif_not_loaded).
