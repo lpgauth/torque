@@ -38,6 +38,13 @@ defmodule Torque.ErlangTest do
     test "returns errors as tuples" do
       assert {:error, :unsupported_type} = :torque.encode(self())
     end
+
+    test "pretty prints with the two-space default or a custom indent" do
+      assert {:ok, "{\n  \"k\": [\n    1\n  ]\n}"} = :torque.encode({[{"k", [1]}]}, pretty: true)
+      assert {:ok, "{\n\t\"k\": 1\n}"} = :torque.encode({[{"k", 1}]}, pretty: "\t")
+      assert {:ok, "{\n\t\"k\": 1\n}"} = :torque.encode({[{"k", 1}]}, [{:pretty, "\t"}])
+      assert {:ok, ~s({"k":1})} = :torque.encode({[{"k", 1}]}, pretty: false)
+    end
   end
 
   describe "parse and lookups" do
@@ -82,6 +89,7 @@ defmodule Torque.ErlangTest do
           fn -> :torque.decode("1", bogus: 1) end,
           fn -> :torque.decode("1", strings: :bogus) end,
           fn -> :torque.encode(1, [:bogus]) end,
+          fn -> :torque.encode(1, pretty: 1) end,
           fn -> :torque.parse("1", validate: false) end,
           fn -> :torque.compile_pointers([], strings: :copy) end
         ] do
