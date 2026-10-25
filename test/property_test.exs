@@ -392,6 +392,47 @@ defmodule Torque.PropertyTest do
 
   # ---- Encode/decode roundtrip ----
 
+  # Whitespace and control characters in strings and arbitrary floats, which
+  # json_term/1 leaves out: pretty output must leave both untouched.
+  defp pretty_term(depth \\ 3) do
+    scalar =
+      one_of([
+        json_scalar(),
+        float(),
+        string([?a, ?\s, ?\t, ?\n, ?\r, ?", ?\\, 0x01, 0x1F, 0xE9], max_length: 10)
+      ])
+
+    if depth == 0 do
+      scalar
+    else
+      one_of([
+        scalar,
+        list_of(pretty_term(depth - 1), max_length: 4),
+        map_of(json_key(), pretty_term(depth - 1), max_length: 4)
+      ])
+    end
+  end
+
+  describe "pretty encode" do
+    property "decodes to the same value as compact output" do
+      check all(term <- pretty_term(), indent <- member_of([true, "\t", "    "])) do
+        {:ok, compact} = Torque.encode(term)
+        {:ok, pretty} = Torque.encode(term, pretty: indent)
+        assert Torque.decode(pretty) == Torque.decode(compact)
+      end
+    end
+
+    # Torque and Jason spell some floats and \u escapes differently, so the
+    # whitespace is compared only where the compact output already agrees.
+    property "matches Jason's pretty output wherever compact output matches" do
+      check all(term <- pretty_term()) do
+        if Torque.encode!(term) == Jason.encode!(term) do
+          assert Torque.encode!(term, pretty: true) == Jason.encode!(term, pretty: true)
+        end
+      end
+    end
+  end
+
   describe "encode/decode roundtrip" do
     property "decode then encode then decode is idempotent" do
       check all(term <- json_term()) do

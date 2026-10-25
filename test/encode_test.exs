@@ -1,3 +1,11 @@
+defmodule Torque.EncodeTest.Nested do
+  defstruct [:id]
+end
+
+defimpl Torque.Encoder, for: Torque.EncodeTest.Nested do
+  def encode(_struct), do: %{items: [1, 2]}
+end
+
 defmodule Torque.EncodeTest do
   use ExUnit.Case, async: true
 
@@ -199,7 +207,7 @@ defmodule Torque.EncodeTest do
     test "a cached atom name does not decide which atom is null" do
       for _ <- 1..2 do
         assert {:ok, ~s(["null",null])} = Torque.encode([:null, nil])
-        assert {:ok, ~s([null,"nil"])} = Torque.Native.encode_opts([:null, nil], :null)
+        assert {:ok, ~s([null,"nil"])} = Torque.Native.encode_opts([:null, nil], :null, "")
       end
     end
 
@@ -262,6 +270,150 @@ defmodule Torque.EncodeTest do
     end
   end
 
+  describe "encode/2 with pretty: true" do
+    # Binary keys, because a flatmap's literal order follows atom-table indices
+    # for atom keys, which depends on which atoms the VM interned first.
+    test "indents nested containers by two spaces" do
+      assert Torque.encode(%{"a" => [1, 2], "b" => %{"c" => "x"}}, pretty: true) ==
+               {:ok,
+                "{\n" <>
+                  "  \"a\": [\n" <>
+                  "    1,\n" <>
+                  "    2\n" <>
+                  "  ],\n" <>
+                  "  \"b\": {\n" <>
+                  "    \"c\": \"x\"\n" <>
+                  "  }\n" <>
+                  "}"}
+    end
+
+    test "keeps empty containers on one line" do
+      assert Torque.encode([%{}, [], [1], %{a: []}], pretty: true) ==
+               {:ok, "[\n  {},\n  [],\n  [\n    1\n  ],\n  {\n    \"a\": []\n  }\n]"}
+
+      assert Torque.encode([], pretty: true) == {:ok, "[]"}
+      assert Torque.encode(%{}, pretty: true) == {:ok, "{}"}
+      assert Torque.encode({[]}, pretty: true) == {:ok, "{}"}
+    end
+
+    test "uses a custom indent unit" do
+      assert Torque.encode(%{a: %{b: 1}}, pretty: "\t") ==
+               {:ok, "{\n\t\"a\": {\n\t\t\"b\": 1\n\t}\n}"}
+
+      assert Torque.encode(%{a: [1]}, pretty: "    ") ==
+               {:ok, "{\n    \"a\": [\n        1\n    ]\n}"}
+
+      assert Torque.encode([1], pretty: "") == {:ok, "[1]"}
+    end
+
+    test "accepts up to 16 spaces and tabs as the indent unit" do
+      indent = String.duplicate(" \t", 8)
+      assert Torque.encode([1], pretty: indent) == {:ok, "[\n" <> indent <> "1\n]"}
+      assert Torque.encode_to_iodata([1], pretty: indent) == "[\n" <> indent <> "1\n]"
+    end
+
+    test "rejects an indent unit that is too long or not whitespace" do
+      for indent <- [String.duplicate(" ", 17), "x", "\n", " \r", 2] do
+        assert_raise ArgumentError, ~r/up to 16 spaces and tabs/, fn ->
+          Torque.encode([1], pretty: indent)
+        end
+
+        assert_raise ArgumentError, ~r/up to 16 spaces and tabs/, fn ->
+          Torque.encode_to_iodata([1], pretty: indent, dirty: true)
+        end
+      end
+    end
+
+    test "the NIFs reject an invalid indent unit" do
+      for indent <- [String.duplicate(" ", 17), "x", :tab] do
+        assert_raise ArgumentError, fn -> Torque.Native.encode_opts([1], nil, indent) end
+        assert_raise ArgumentError, fn -> Torque.Native.encode_opts_dirty([1], nil, indent) end
+        assert_raise ArgumentError, fn -> Torque.Native.encode_iodata_opts([1], indent) end
+        assert_raise ArgumentError, fn -> Torque.Native.encode_iodata_opts_dirty([1], indent) end
+      end
+    end
+
+    test "pretty output round-trips" do
+      input = %{"a" => [1, 2.5, "x", nil, true], "b" => %{"c" => %{}}, "d" => []}
+      assert {:ok, json} = Torque.encode(input, pretty: true)
+      assert {:ok, ^input} = Torque.decode(json)
+      assert json == Jason.encode!(input, pretty: true)
+    end
+
+    test "string output matches Jason byte for byte" do
+      input = %{
+        "records" => [%{"id" => 1, "tags" => ["a", "b"], "meta" => %{}}, %{"id" => 2}]
+      }
+
+      assert {:ok, json} = Torque.encode(input, pretty: true)
+      assert json == Jason.encode!(input, pretty: true)
+    end
+
+    test "proplist objects are indented" do
+      assert Torque.encode({[{:a, [1]}]}, pretty: true) == {:ok, "{\n  \"a\": [\n    1\n  ]\n}"}
+    end
+
+    test "encodes atom and integer keys" do
+      assert Torque.encode(%{2 => 3, :a => 1}, pretty: true) ==
+               {:ok, "{\n  \"2\": 3,\n  \"a\": 1\n}"}
+    end
+
+    test "combined with dirty: true" do
+      input = %{a: [1, 2], b: %{c: "x"}}
+      assert Torque.encode(input, pretty: true, dirty: true) == Torque.encode(input, pretty: true)
+    end
+
+    test "encode!/2 and encode_to_iodata/2 accept pretty" do
+      assert Torque.encode!(%{a: 1}, pretty: true) == "{\n  \"a\": 1\n}"
+      assert Torque.encode_to_iodata(%{a: 1}, pretty: true) == "{\n  \"a\": 1\n}"
+      assert Torque.encode_to_iodata(%{a: 1}, pretty: "  ", dirty: true) == "{\n  \"a\": 1\n}"
+    end
+
+    test "deep nesting indents every level" do
+      deep = Enum.reduce(1..5, 1, fn _, acc -> [acc] end)
+      assert {:ok, json} = Torque.encode(deep, pretty: true)
+
+      assert json ==
+               "[\n  [\n    [\n      [\n        [\n          1\n        ]\n      ]\n    ]\n  ]\n]"
+    end
+
+    test "indents to the nesting limit and reports one level past it" do
+      nest = fn n -> Enum.reduce(1..n, 1, fn _, acc -> [acc] end) end
+      indent = String.duplicate(" ", 16)
+
+      assert {:ok, json} = Torque.encode(nest.(128), pretty: indent)
+      assert Torque.decode!(json) == nest.(128)
+      assert json =~ "\n" <> String.duplicate(indent, 128) <> "1\n"
+      assert Torque.encode(nest.(129), pretty: indent) == {:error, :nesting_too_deep}
+    end
+
+    test "the indent does not leak into a later compact call" do
+      term = %{"a" => [1, %{"b" => []}]}
+      compact = ~s({"a":[1,{"b":[]}]})
+
+      for _ <- 1..3 do
+        assert {:ok, "{\n" <> _} = Torque.encode(term, pretty: "\t")
+        assert Torque.encode(term) == {:ok, compact}
+        assert Torque.encode(term, dirty: false) == {:ok, compact}
+        assert Torque.encode_to_iodata(term) == compact
+      end
+    end
+
+    test "struct expansion retries with the indent" do
+      assert Torque.encode!(%Torque.EncodeTest.Nested{id: 1}, pretty: true) ==
+               "{\n  \"items\": [\n    1,\n    2\n  ]\n}"
+    end
+
+    test "rejects other pretty values" do
+      assert_raise ArgumentError, ~r/:pretty/, fn -> Torque.encode(%{a: 1}, pretty: 2) end
+      assert_raise ArgumentError, ~r/:pretty/, fn -> Torque.encode(%{a: 1}, pretty: :yes) end
+    end
+
+    test "errors propagate" do
+      assert {:error, :unsupported_type} = Torque.encode(self(), pretty: true)
+    end
+  end
+
   describe "encode/2 with dirty: true" do
     test "matches default scheduler output" do
       input = %{"a" => [1, 2, 3], "b" => "hello", "c" => %{d: 1.5}}
@@ -286,6 +438,13 @@ defmodule Torque.EncodeTest do
 
     test "encode_to_iodata/2 accepts dirty option" do
       assert Torque.encode_to_iodata(%{a: 1}, dirty: true) == Torque.encode_to_iodata(%{a: 1})
+    end
+
+    test "a non-boolean dirty value is taken as truthy or falsy" do
+      assert Torque.encode(%{a: 1}, dirty: nil) == {:ok, ~s({"a":1})}
+      assert Torque.encode(%{a: 1}, dirty: :yes) == {:ok, ~s({"a":1})}
+      assert Torque.encode(%{a: 1}, dirty: nil, pretty: true) == {:ok, ~s({\n  "a": 1\n})}
+      assert Torque.encode_to_iodata(%{a: 1}, dirty: nil) == ~s({"a":1})
     end
 
     test "encode_to_iodata/2 with dirty option raises on error" do

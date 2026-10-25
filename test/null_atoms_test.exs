@@ -46,10 +46,10 @@ defmodule Torque.NullAtomsTest do
   end
 
   test "encode writes JSON null for the given atom only" do
-    assert {:ok, ~s([null,"nil"])} = Native.encode_opts([:null, nil], :null)
-    assert {:ok, json} = Native.encode_opts(%{a: :null, b: nil}, :null)
+    assert {:ok, ~s([null,"nil"])} = Native.encode_opts([:null, nil], :null, "")
+    assert {:ok, json} = Native.encode_opts(%{a: :null, b: nil}, :null, "")
     assert Torque.decode!(json) == %{"a" => nil, "b" => "nil"}
-    assert {:ok, ~s([null,"null"])} = Native.encode_opts_dirty([nil, :null], nil)
+    assert {:ok, ~s([null,"null"])} = Native.encode_opts_dirty([nil, :null], nil, "")
   end
 
   test "the Elixir API still uses nil" do

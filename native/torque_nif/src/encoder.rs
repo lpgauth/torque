@@ -7,7 +7,7 @@ use rustler::sys::{
     enif_get_tuple, enif_get_uint64, enif_inspect_binary, enif_is_empty_list, enif_release_binary,
     enif_term_to_binary, ErlNifBinary, ErlNifCharEncoding, ErlNifEnv, ERL_NIF_TERM,
 };
-use rustler::{schedule, Atom, Env, NewBinary, Term, TermType};
+use rustler::{schedule, Atom, Env, NewBinary, NifResult, Term, TermType};
 use std::cell::RefCell;
 use std::mem::MaybeUninit;
 
@@ -19,6 +19,11 @@ const TIMESLICE_MIN_BYTES: usize = 4096;
 /// Cap on the retained thread-local scratch buffer, so a one-off huge document
 /// doesn't pin a large allocation on a scheduler thread indefinitely.
 const BUF_RETAIN_CAP: usize = 1 << 20;
+
+/// Longest pretty-print indent unit accepted. Every line repeats the unit once
+/// per nesting level, so an unbounded one would let a short document produce
+/// gigabytes of output on a normal scheduler.
+const MAX_INDENT: usize = 16;
 
 /// Atom-name cache slots per scheduler thread, indexed by atom-table index.
 const ATOM_SLOTS: usize = 512;
@@ -113,6 +118,73 @@ struct Scratch {
     /// Elixir, `null` from Erlang. Set on entry; it rides in the scratch the
     /// recursion already carries rather than a thread-local read per atom.
     null: ERL_NIF_TERM,
+    /// Indent unit for pretty output, copied from the caller's binary on entry
+    /// so the scratch never holds env-owned memory. Empty selects compact
+    /// output.
+    indent: Vec<u8>,
+}
+
+impl Scratch {
+    #[inline]
+    fn prepare(&mut self, null: ERL_NIF_TERM, indent: &[u8]) {
+        self.buf.clear();
+        self.null = null;
+        self.indent.clear();
+        self.indent.extend_from_slice(indent);
+    }
+
+    // The shape of the output is a `PRETTY` const parameter rather than a
+    // runtime flag: the compact instantiation is then the code the encoder
+    // wrote before pretty printing existed, with no per-member check, while
+    // the pretty one is monomorphized separately.
+
+    /// Separator before a container member or array item: a bare comma when
+    /// compact, a line break plus `level` indents when pretty.
+    #[inline(always)]
+    fn separator<const PRETTY: bool>(&mut self, first: bool, level: u32) {
+        if PRETTY {
+            self.buf
+                .extend_from_slice(if first { b"\n" } else { b",\n" });
+            self.write_indent(level);
+        } else if !first {
+            self.buf.push(b',');
+        }
+    }
+
+    #[inline(always)]
+    fn key_separator<const PRETTY: bool>(&mut self) {
+        if PRETTY {
+            self.buf.extend_from_slice(b": ");
+        } else {
+            self.buf.push(b':');
+        }
+    }
+
+    /// Closes a container. An empty one stays on one line, matching Jason.
+    #[inline(always)]
+    fn close<const PRETTY: bool>(&mut self, bracket: u8, non_empty: bool, level: u32) {
+        if PRETTY && non_empty {
+            self.buf.push(b'\n');
+            self.write_indent(level);
+        }
+        self.buf.push(bracket);
+    }
+
+    #[inline(always)]
+    fn write_indent(&mut self, levels: u32) {
+        for _ in 0..levels {
+            self.buf.extend_from_slice(&self.indent);
+        }
+    }
+
+    /// Drops an oversized buffer a one-off call left behind, so it isn't
+    /// pinned on this scheduler thread indefinitely.
+    #[inline]
+    fn finish(&mut self) {
+        if self.buf.capacity() > BUF_RETAIN_CAP {
+            self.buf.shrink_to(BUF_RETAIN_CAP);
+        }
+    }
 }
 
 thread_local! {
@@ -123,6 +195,7 @@ thread_local! {
         buf: Vec::with_capacity(2048),
         names: AtomNames::new(),
         null: 0,
+        indent: Vec::new(),
     });
 }
 
@@ -298,65 +371,113 @@ fn write_atom_name(
     Ok(())
 }
 
+/// Bytes of the caller's indent binary; empty selects compact output. The
+/// Elixir and Erlang fronts validate the indent with a friendlier error, so
+/// `badarg` here only answers a direct NIF call.
+#[inline]
+fn indent_bytes<'a>(env_raw: *mut ErlNifEnv, indent: Term<'a>) -> NifResult<&'a [u8]> {
+    let mut bin = MaybeUninit::<ErlNifBinary>::uninit();
+    // SAFETY: `indent` belongs to `env_raw`; on success `bin` describes bytes
+    // that live as long as the term.
+    let bytes = unsafe {
+        if enif_inspect_binary(env_raw, indent.as_c_arg(), bin.as_mut_ptr()) == 0 {
+            return Err(rustler::Error::BadArg);
+        }
+        let bin = bin.assume_init();
+        std::slice::from_raw_parts(bin.data, bin.size)
+    };
+    if bytes.len() > MAX_INDENT || bytes.iter().any(|&b| b != b' ' && b != b'\t') {
+        return Err(rustler::Error::BadArg);
+    }
+    Ok(bytes)
+}
+
 #[inline]
 fn encode_impl<'a>(
     env: Env<'a>,
     term: Term<'a>,
     scheduler: Scheduler,
     null: ERL_NIF_TERM,
+    indent: &[u8],
 ) -> Term<'a> {
     let env_raw = env.as_c_arg();
     SCRATCH.with(|cell| {
         let s = &mut *cell.borrow_mut();
-        s.buf.clear();
-        s.null = null;
-        let result = match encode_term(env, env_raw, term, s, MAX_DEPTH) {
+        s.prepare(null, indent);
+        let result = match encode_root(env, env_raw, term, s) {
             Ok(()) => {
                 let bin_term = buf_to_binary(env, &s.buf, scheduler);
                 make_tuple2(env, atoms::ok().as_c_arg(), bin_term.as_c_arg())
             }
             Err(e) => make_tuple2(env, atoms::error().as_c_arg(), error_reason(e)),
         };
-        if s.buf.capacity() > BUF_RETAIN_CAP {
-            s.buf.shrink_to(BUF_RETAIN_CAP);
-        }
+        s.finish();
         result
     })
 }
 
 #[rustler::nif]
 fn encode<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
-    encode_impl(env, term, Scheduler::Normal, atoms::nil().as_c_arg())
+    encode_impl(env, term, Scheduler::Normal, atoms::nil().as_c_arg(), &[])
 }
 
 /// Opt-in dirty variant: output size can't be predicted from the input term
 /// without a full traversal, so large encodes are dispatched by the caller.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn encode_dirty<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
-    encode_impl(env, term, Scheduler::Dirty, atoms::nil().as_c_arg())
+    encode_impl(env, term, Scheduler::Dirty, atoms::nil().as_c_arg(), &[])
 }
 
-/// `encode/1` with the atom that encodes as JSON null chosen by the caller.
+/// `encode/1` with the atom that encodes as JSON null and the pretty-print
+/// indent chosen by the caller; an empty indent binary means compact output.
 #[rustler::nif]
-fn encode_opts<'a>(env: Env<'a>, term: Term<'a>, null: Atom) -> Term<'a> {
-    encode_impl(env, term, Scheduler::Normal, null.as_c_arg())
+fn encode_opts<'a>(
+    env: Env<'a>,
+    term: Term<'a>,
+    null: Atom,
+    indent: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let indent = indent_bytes(env.as_c_arg(), indent)?;
+    Ok(encode_impl(
+        env,
+        term,
+        Scheduler::Normal,
+        null.as_c_arg(),
+        indent,
+    ))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn encode_opts_dirty<'a>(env: Env<'a>, term: Term<'a>, null: Atom) -> Term<'a> {
-    encode_impl(env, term, Scheduler::Dirty, null.as_c_arg())
+fn encode_opts_dirty<'a>(
+    env: Env<'a>,
+    term: Term<'a>,
+    null: Atom,
+    indent: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let indent = indent_bytes(env.as_c_arg(), indent)?;
+    Ok(encode_impl(
+        env,
+        term,
+        Scheduler::Dirty,
+        null.as_c_arg(),
+        indent,
+    ))
 }
 
 /// Returns the raw binary on success, raises on error.
 /// Skips the {:ok, binary} tuple wrapping for maximum throughput.
 #[inline]
-fn encode_iodata_impl<'a>(env: Env<'a>, term: Term<'a>, scheduler: Scheduler) -> Term<'a> {
+fn encode_iodata_impl<'a>(
+    env: Env<'a>,
+    term: Term<'a>,
+    scheduler: Scheduler,
+    indent: &[u8],
+) -> Term<'a> {
     let env_raw = env.as_c_arg();
     SCRATCH.with(|cell| {
         let s = &mut *cell.borrow_mut();
-        s.buf.clear();
-        s.null = atoms::nil().as_c_arg();
-        let result = match encode_term(env, env_raw, term, s, MAX_DEPTH) {
+        s.prepare(atoms::nil().as_c_arg(), indent);
+        let result = match encode_root(env, env_raw, term, s) {
             Ok(()) => buf_to_binary(env, &s.buf, scheduler),
             // SAFETY: the reason is an atom, and the raised term is returned.
             Err(e) => unsafe {
@@ -366,25 +487,56 @@ fn encode_iodata_impl<'a>(env: Env<'a>, term: Term<'a>, scheduler: Scheduler) ->
                 )
             },
         };
-        if s.buf.capacity() > BUF_RETAIN_CAP {
-            s.buf.shrink_to(BUF_RETAIN_CAP);
-        }
+        s.finish();
         result
     })
 }
 
 #[rustler::nif]
 fn encode_iodata<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
-    encode_iodata_impl(env, term, Scheduler::Normal)
+    encode_iodata_impl(env, term, Scheduler::Normal, &[])
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
 fn encode_iodata_dirty<'a>(env: Env<'a>, term: Term<'a>) -> Term<'a> {
-    encode_iodata_impl(env, term, Scheduler::Dirty)
+    encode_iodata_impl(env, term, Scheduler::Dirty, &[])
+}
+
+/// `encode_iodata/1` with a pretty-print indent; empty means compact.
+#[rustler::nif]
+fn encode_iodata_opts<'a>(env: Env<'a>, term: Term<'a>, indent: Term<'a>) -> NifResult<Term<'a>> {
+    let indent = indent_bytes(env.as_c_arg(), indent)?;
+    Ok(encode_iodata_impl(env, term, Scheduler::Normal, indent))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn encode_iodata_opts_dirty<'a>(
+    env: Env<'a>,
+    term: Term<'a>,
+    indent: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let indent = indent_bytes(env.as_c_arg(), indent)?;
+    Ok(encode_iodata_impl(env, term, Scheduler::Dirty, indent))
+}
+
+/// Picks the compact or pretty instantiation once per call, so neither pays
+/// for the other's branches.
+#[inline]
+fn encode_root(
+    env: Env,
+    env_raw: *mut ErlNifEnv,
+    term: Term,
+    s: &mut Scratch,
+) -> Result<(), EncodeError> {
+    if s.indent.is_empty() {
+        encode_term::<false>(env, env_raw, term, s, MAX_DEPTH)
+    } else {
+        encode_term::<true>(env, env_raw, term, s, MAX_DEPTH)
+    }
 }
 
 #[inline]
-fn encode_term(
+fn encode_term<const PRETTY: bool>(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
@@ -392,18 +544,18 @@ fn encode_term(
     depth: u32,
 ) -> Result<(), EncodeError> {
     match term.get_type() {
-        TermType::Map => encode_map(env, env_raw, term, s, depth),
-        TermType::List => encode_list(env, env_raw, term, s, depth),
+        TermType::Map => encode_map::<PRETTY>(env, env_raw, term, s, depth),
+        TermType::List => encode_list::<PRETTY>(env, env_raw, term, s, depth),
         TermType::Binary => encode_binary(env_raw, term, &mut s.buf),
         TermType::Integer => encode_integer(env_raw, term, &mut s.buf),
         TermType::Float => encode_float(env_raw, term, &mut s.buf),
         TermType::Atom => encode_atom(env_raw, term, s),
-        TermType::Tuple => encode_tuple(env, env_raw, term, s, depth),
+        TermType::Tuple => encode_tuple::<PRETTY>(env, env_raw, term, s, depth),
         _ => Err(EncodeError::UnsupportedType),
     }
 }
 
-fn encode_map(
+fn encode_map<const PRETTY: bool>(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
@@ -428,15 +580,13 @@ fn encode_map(
         if key.as_c_arg() == struct_key {
             return Err(EncodeError::UnhandledStruct);
         }
-        if !first {
-            s.buf.push(b',');
-        }
+        s.separator::<PRETTY>(first, MAX_DEPTH - depth + 1);
         first = false;
         encode_map_key(env_raw, key, s)?;
-        s.buf.push(b':');
-        encode_term(env, env_raw, value, s, depth - 1)?;
+        s.key_separator::<PRETTY>();
+        encode_term::<PRETTY>(env, env_raw, value, s, depth - 1)?;
     }
-    s.buf.push(b'}');
+    s.close::<PRETTY>(b'}', !first, MAX_DEPTH - depth);
     Ok(())
 }
 
@@ -476,7 +626,7 @@ fn encode_map_key(env_raw: *mut ErlNifEnv, key: Term, s: &mut Scratch) -> Result
     }
 }
 
-fn encode_list(
+fn encode_list<const PRETTY: bool>(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
@@ -493,13 +643,11 @@ fn encode_list(
     let mut tail: ERL_NIF_TERM = 0;
     // SAFETY: `current` is the list term or a tail read from it, all in `env`.
     while unsafe { enif_get_list_cell(env_raw, current, &mut head, &mut tail) } != 0 {
-        if !first {
-            s.buf.push(b',');
-        }
+        s.separator::<PRETTY>(first, MAX_DEPTH - depth + 1);
         first = false;
         // SAFETY: a list cell's head belongs to the list's env.
         let item = unsafe { Term::new(env, head) };
-        encode_term(env, env_raw, item, s, depth - 1)?;
+        encode_term::<PRETTY>(env, env_raw, item, s, depth - 1)?;
         current = tail;
     }
     // Improper list: the loop ends on a non-cons tail, which must be [].
@@ -507,7 +655,7 @@ fn encode_list(
     if unsafe { enif_is_empty_list(env_raw, current) } == 0 {
         return Err(EncodeError::UnsupportedType);
     }
-    s.buf.push(b']');
+    s.close::<PRETTY>(b']', !first, MAX_DEPTH - depth);
     Ok(())
 }
 
@@ -613,7 +761,7 @@ fn get_tuple_raw(term: Term<'_>) -> Result<&[ERL_NIF_TERM], EncodeError> {
     }
 }
 
-fn encode_tuple(
+fn encode_tuple<const PRETTY: bool>(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
@@ -625,13 +773,13 @@ fn encode_tuple(
         // SAFETY: a tuple's elements belong to the tuple's env.
         let inner = unsafe { Term::new(env, elements[0]) };
         if inner.get_type() == TermType::List {
-            return encode_proplist(env, env_raw, inner, s, depth);
+            return encode_proplist::<PRETTY>(env, env_raw, inner, s, depth);
         }
     }
     Err(EncodeError::UnsupportedType)
 }
 
-fn encode_proplist(
+fn encode_proplist<const PRETTY: bool>(
     env: Env,
     env_raw: *mut ErlNifEnv,
     term: Term,
@@ -654,15 +802,13 @@ fn encode_proplist(
         if pair.len() != 2 {
             return Err(EncodeError::MalformedProplist);
         }
-        if !first {
-            s.buf.push(b',');
-        }
+        s.separator::<PRETTY>(first, MAX_DEPTH - depth + 1);
         first = false;
         // SAFETY: a tuple's elements belong to the tuple's env.
         let (key, val) = unsafe { (Term::new(env, pair[0]), Term::new(env, pair[1])) };
         encode_map_key(env_raw, key, s)?;
-        s.buf.push(b':');
-        encode_term(env, env_raw, val, s, depth - 1)?;
+        s.key_separator::<PRETTY>();
+        encode_term::<PRETTY>(env, env_raw, val, s, depth - 1)?;
         current = tail;
     }
     // Improper list: the loop ends on a non-cons tail, which must be [].
@@ -670,6 +816,6 @@ fn encode_proplist(
     if unsafe { enif_is_empty_list(env_raw, current) } == 0 {
         return Err(EncodeError::MalformedProplist);
     }
-    s.buf.push(b'}');
+    s.close::<PRETTY>(b'}', !first, MAX_DEPTH - depth);
     Ok(())
 }

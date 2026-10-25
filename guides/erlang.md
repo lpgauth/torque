@@ -69,14 +69,18 @@ booleans; other atoms as strings. Maps take atom, binary or integer keys, and
 jiffy-style `{Proplist}` tuples encode as objects.
 
 Options: `dirty` (or `{dirty, true}`) runs the encode on a dirty CPU scheduler,
-for terms expected to produce large output.
+for terms expected to produce large output; `pretty` (or `{pretty, true}`)
+indents nested members by two spaces, and `{pretty, Indent}` uses the binary
+`Indent`, up to 16 spaces and tabs, as the indent unit.
 
 `Reason` is one of `unsupported_type`, `invalid_utf8`, `invalid_key`,
 `malformed_proplist`, `non_finite_float` or `nesting_too_deep`.
 
 ```erlang
 {ok, <<"{\"a\":null}">>} = torque:encode(#{a => null}),
-{ok, <<"{\"k\":[1,true]}">>} = torque:encode({[{k, [1, true]}]}).
+{ok, <<"{\"k\":[1,true]}">>} = torque:encode({[{k, [1, true]}]}),
+{ok, <<"{\n  \"k\": 1\n}">>} = torque:encode(#{k => 1}, [pretty]),
+{ok, <<"{\n\t\"k\": 1\n}">>} = torque:encode(#{k => 1}, [{pretty, <<"\t">>}]).
 ```
 
 ## Querying a parsed document

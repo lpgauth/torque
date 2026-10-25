@@ -92,15 +92,27 @@ encode(Term) ->
     "atoms as strings. Maps take atom, binary or integer keys, and "
     "`{Proplist}` tuples encode as objects. Options: `dirty` runs the "
     "encode on a dirty CPU scheduler, for terms expected to produce large "
-    "output.").
--spec encode(term(), [dirty | {dirty, boolean()}]) ->
+    "output; `pretty` (or `{pretty, true}`) indents nested members by two "
+    "spaces, and `{pretty, Indent}` uses `Indent`, up to 16 spaces and tabs, "
+    "as the indent unit.").
+-spec encode(term(), [dirty | {dirty, boolean()} | pretty | {pretty, boolean() | binary()}]) ->
     {ok, binary()} | {error, encode_error()}.
 encode(Term, Opts) when is_list(Opts) ->
-    check_opts(Opts, [dirty]),
+    check_opts(Opts, [dirty, pretty]),
+    Indent = indent(proplists:get_value(pretty, Opts, false)),
     case proplists:get_bool(dirty, Opts) of
-        true -> ?NIF:encode_opts_dirty(Term, null);
-        false -> ?NIF:encode_opts(Term, null)
+        true -> ?NIF:encode_opts_dirty(Term, null, Indent);
+        false -> ?NIF:encode_opts(Term, null, Indent)
     end.
+
+indent(false) -> <<>>;
+indent(true) -> <<"  ">>;
+indent(Indent) when is_binary(Indent), byte_size(Indent) =< 16 ->
+    case binary:replace(Indent, [<<" ">>, <<"\t">>], <<>>, [global]) of
+        <<>> -> Indent;
+        _ -> erlang:error({invalid_option, {pretty, Indent}})
+    end;
+indent(Other) -> erlang:error({invalid_option, {pretty, Other}}).
 
 ?DOC("Same as `parse(Json, [])`.").
 -spec parse(binary()) -> {ok, document()} | {error, decode_error()}.

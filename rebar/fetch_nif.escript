@@ -31,6 +31,12 @@
     ?V2_FLAGS ++ ["avx", "avx2", "bmi1", "bmi2", "f16c", "fma", "abm", "movbe", "pclmulqdq"]
 ).
 
+%% httpc caps response headers at 10 KB from OTP 28.5.0.6 and 29 on, and the
+%% redirect to a release asset already sends 10.8 KB of them, most of it a
+%% content-security-policy. The limit is per response, not per hop, and older
+%% httpc has no limit at all, where the option is ignored.
+-define(MAX_HEADER_SIZE, 65536).
+
 main(["--print-asset"]) ->
     case asset() of
         {ok, Asset} -> io:format("~s~n", [Asset]);
@@ -216,7 +222,8 @@ download(Asset, Cached) ->
     {ok, _} = application:ensure_all_started(inets),
     Request = {Url, [{"user-agent", "torque-fetch-nif"}]},
     HttpOpts = [{ssl, tls_opts()}, {autoredirect, true}, {timeout, 120000}],
-    case httpc:request(get, Request, HttpOpts, [{body_format, binary}]) of
+    Opts = [{body_format, binary}, {max_header_size, ?MAX_HEADER_SIZE}],
+    case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, {{_, 200, _}, _, Body}} ->
             ok = filelib:ensure_dir(Cached),
             _ = file:write_file(Cached, Body),
