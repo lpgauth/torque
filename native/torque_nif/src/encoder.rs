@@ -122,6 +122,10 @@ struct Scratch {
     /// so the scratch never holds env-owned memory. Empty selects compact
     /// output.
     indent: Vec<u8>,
+    /// A line break followed by the indent unit repeated, grown on demand, so
+    /// a line at any level is one copy of a prefix. `MAX_INDENT` and
+    /// `MAX_DEPTH` bound it at about 2 KB, so it is never shrunk.
+    line: Vec<u8>,
 }
 
 impl Scratch {
@@ -131,6 +135,8 @@ impl Scratch {
         self.null = null;
         self.indent.clear();
         self.indent.extend_from_slice(indent);
+        self.line.clear();
+        self.line.push(b'\n');
     }
 
     // The shape of the output is a `PRETTY` const parameter rather than a
@@ -142,12 +148,11 @@ impl Scratch {
     /// compact, a line break plus `level` indents when pretty.
     #[inline(always)]
     fn separator<const PRETTY: bool>(&mut self, first: bool, level: u32) {
-        if PRETTY {
-            self.buf
-                .extend_from_slice(if first { b"\n" } else { b",\n" });
-            self.write_indent(level);
-        } else if !first {
+        if !first {
             self.buf.push(b',');
+        }
+        if PRETTY {
+            self.write_line(level);
         }
     }
 
@@ -164,16 +169,24 @@ impl Scratch {
     #[inline(always)]
     fn close<const PRETTY: bool>(&mut self, bracket: u8, non_empty: bool, level: u32) {
         if PRETTY && non_empty {
-            self.buf.push(b'\n');
-            self.write_indent(level);
+            self.write_line(level);
         }
         self.buf.push(bracket);
     }
 
     #[inline(always)]
-    fn write_indent(&mut self, levels: u32) {
-        for _ in 0..levels {
-            self.buf.extend_from_slice(&self.indent);
+    fn write_line(&mut self, level: u32) {
+        let len = 1 + self.indent.len() * level as usize;
+        if self.line.len() < len {
+            self.grow_line(len);
+        }
+        self.buf.extend_from_slice(&self.line[..len]);
+    }
+
+    #[cold]
+    fn grow_line(&mut self, len: usize) {
+        while self.line.len() < len {
+            self.line.extend_from_slice(&self.indent);
         }
     }
 
@@ -196,6 +209,7 @@ thread_local! {
         names: AtomNames::new(),
         null: 0,
         indent: Vec::new(),
+        line: Vec::new(),
     });
 }
 
