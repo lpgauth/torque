@@ -50,7 +50,7 @@ jobs:
             otp: "24"
             elixir: "1.15"
           # Apple Silicon: the NEON escape kernels and parser paths.
-          - os: macos-14
+          - os: macos-15
             otp: "28"
             elixir: "1.18"
     steps:
