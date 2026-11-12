@@ -261,7 +261,7 @@ platform. `TORQUE_CPU_VARIANT` picks the x86_64 variant as it does for Mix.
 | Function | Description |
 |----------|-------------|
 | `Torque.compile_pointers(paths, opts)` | Pre-compile a fixed path set into a reusable handle |
-| `Torque.decode(binary, opts)` | Decode JSON to Elixir terms (`strings: :copy` to detach strings from the input) |
+| `Torque.decode(binary, opts)` | Decode JSON to Elixir terms (`strings: :copy` to detach strings from the input, `keys: :atoms` or `:atoms!` for atom keys) |
 | `Torque.decode!(binary, opts)` | Decode JSON, raising on error |
 | `Torque.encode(term, opts)` | Encode term to JSON binary |
 | `Torque.encode!(term, opts)` | Encode term, raising on error |
@@ -282,7 +282,7 @@ platform. `TORQUE_CPU_VARIANT` picks the x86_64 variant as it does for Mix.
 
 | JSON | Elixir |
 |------|--------|
-| object | map (binary keys) |
+| object | map (binary keys; atoms with `keys: :atoms` or `:atoms!`) |
 | array | list |
 | string | binary |
 | integer | integer |
@@ -318,6 +318,8 @@ Functions return `{:error, reason}` tuples (or raise `ArgumentError` for bang/io
 | Atom | Returned by | Meaning |
 |------|-------------|---------|
 | `:nesting_too_deep` | `decode/1`, `parse/1`, `get/2`, `get_many/2`, `parse_get_many_nil/2` | Document exceeds 128 nesting levels |
+| `:nonexistent_atom` | `decode/2` with `keys: :atoms!` | An object key names no existing atom |
+| `:atom_too_long` | `decode/2` with `keys: :atoms` | An object key is longer than 255 characters, the longest atom name |
 
 `parse/1`, `decode/1`, and `parse_get_many_nil/2` also return `{:error, binary}` with a message from sonic-rs for malformed JSON.
 

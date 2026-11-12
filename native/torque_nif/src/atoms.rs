@@ -3,6 +3,8 @@ rustler::atoms! {
     error,
     no_such_field,
     nesting_too_deep,
+    nonexistent_atom,
+    atom_too_long,
     nil,
     // atoms for fast identity comparison in encoder
     r#true = "true",

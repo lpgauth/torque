@@ -1,5 +1,7 @@
 use crate::atoms;
-use crate::native_decode::{self, builder_error_term, with_term_builder, Strings, TermBuilder};
+use crate::native_decode::{
+    self, builder_error_term, with_term_builder, BinaryKeys, ObjectKeys, Strings, TermBuilder,
+};
 use crate::nif_util::{make_list, make_tuple2, timeslice_percent, REDUCTION_COUNT};
 use crate::types::{value_to_term, MAX_DEPTH};
 use crate::{CompiledPaths, ParsedDocument, PathSeg};
@@ -362,6 +364,7 @@ fn decode<'a>(env: Env<'a>, json: Binary<'a>) -> Term<'a> {
         input_term,
         json.as_slice(),
         Strings::Borrow,
+        ObjectKeys::Binary,
         atoms::nil().as_c_arg(),
     );
     schedule::consume_timeslice(env, timeslice_percent(json.len()));
@@ -376,16 +379,28 @@ fn decode_dirty<'a>(env: Env<'a>, json: Binary<'a>) -> Term<'a> {
         input_term,
         json.as_slice(),
         Strings::Borrow,
+        ObjectKeys::Binary,
         atoms::nil().as_c_arg(),
     )
 }
 
 #[rustler::nif]
-fn decode_opts<'a>(env: Env<'a>, json: Binary<'a>, copy_strings: bool, null: Atom) -> Term<'a> {
+fn decode_opts<'a>(
+    env: Env<'a>,
+    json: Binary<'a>,
+    copy_strings: bool,
+    object_keys: ObjectKeys,
+    null: Atom,
+) -> Term<'a> {
     let input_term = json.encode(env).as_c_arg();
-    let strings = decode_strings(copy_strings);
-    let result =
-        native_decode::decode_to_term(env, input_term, json.as_slice(), strings, null.as_c_arg());
+    let result = native_decode::decode_to_term(
+        env,
+        input_term,
+        json.as_slice(),
+        decode_strings(copy_strings),
+        object_keys,
+        null.as_c_arg(),
+    );
     schedule::consume_timeslice(env, timeslice_percent(json.len()));
     result
 }
@@ -395,11 +410,18 @@ fn decode_opts_dirty<'a>(
     env: Env<'a>,
     json: Binary<'a>,
     copy_strings: bool,
+    object_keys: ObjectKeys,
     null: Atom,
 ) -> Term<'a> {
     let input_term = json.encode(env).as_c_arg();
-    let strings = decode_strings(copy_strings);
-    native_decode::decode_to_term(env, input_term, json.as_slice(), strings, null.as_c_arg())
+    native_decode::decode_to_term(
+        env,
+        input_term,
+        json.as_slice(),
+        decode_strings(copy_strings),
+        object_keys,
+        null.as_c_arg(),
+    )
 }
 
 /// `decode/2`'s `strings: :copy` as the builder's string mode.
@@ -634,7 +656,7 @@ fn do_parse_get_many_nil<'a>(
     compiled: &CompiledPaths,
     nodes: &mut usize,
 ) -> Term<'a> {
-    with_term_builder(
+    with_term_builder::<BinaryKeys, _>(
         env,
         input_term,
         bytes,

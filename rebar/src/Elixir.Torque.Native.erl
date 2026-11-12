@@ -13,8 +13,8 @@
     get_many/2,
     decode/1,
     decode_dirty/1,
-    decode_opts/3,
-    decode_opts_dirty/3,
+    decode_opts/4,
+    decode_opts_dirty/4,
     encode/1,
     encode_dirty/1,
     encode_opts/3,
@@ -44,8 +44,8 @@ get(_, _) -> erlang:nif_error(nif_not_loaded).
 get_many(_, _) -> erlang:nif_error(nif_not_loaded).
 decode(_) -> erlang:nif_error(nif_not_loaded).
 decode_dirty(_) -> erlang:nif_error(nif_not_loaded).
-decode_opts(_, _, _) -> erlang:nif_error(nif_not_loaded).
-decode_opts_dirty(_, _, _) -> erlang:nif_error(nif_not_loaded).
+decode_opts(_, _, _, _) -> erlang:nif_error(nif_not_loaded).
+decode_opts_dirty(_, _, _, _) -> erlang:nif_error(nif_not_loaded).
 encode(_) -> erlang:nif_error(nif_not_loaded).
 encode_dirty(_) -> erlang:nif_error(nif_not_loaded).
 encode_opts(_, _, _) -> erlang:nif_error(nif_not_loaded).

@@ -12,7 +12,7 @@
 ?MODULEDOC(
     "Erlang API for Torque, a JSON library backed by sonic-rs NIFs.\n\n"
     "JSON null is the atom `null`, objects decode to maps with binary "
-    "keys, arrays to lists and strings to binaries. In the bulk lookups a "
+    "keys (or atom keys, see `decode/2`), arrays to lists and strings to binaries. In the bulk lookups a "
     "path the document does not contain returns `undefined`, so it stays "
     "distinct from a JSON null. Inputs larger than 20 KB run on a dirty "
     "CPU scheduler.\n\n"
@@ -31,21 +31,22 @@
     parse_get_many_values/2
 ]).
 
--export_type([json/0, document/0, pointers/0]).
+-export_type([json/0, json/1, document/0, pointers/0]).
 
 -define(NIF, 'Elixir.Torque.Native').
 -define(TIMESLICE_BYTES, 20480).
 
--type json() ::
+-type json() :: json(binary()).
+-type json(Key) ::
     null
     | boolean()
     | number()
     | binary()
-    | [json()]
-    | #{binary() => json()}.
+    | [json(Key)]
+    | #{Key => json(Key)}.
 -opaque document() :: reference().
 -opaque pointers() :: reference().
--type decode_error() :: binary() | nesting_too_deep.
+-type decode_error() :: binary() | nesting_too_deep | nonexistent_atom | atom_too_long.
 -type encode_error() ::
     nesting_too_deep
     | unsupported_type
@@ -65,20 +66,33 @@ decode(Json) ->
     "Options: `{strings, reference | copy}`. With `reference` (the "
     "default), strings longer than 64 bytes that needed no unescaping are "
     "sub-binaries of `Json`, which keeps all of it alive while any of "
-    "them is; `copy` gives every string its own binary.").
--spec decode(binary(), [{strings, reference | copy}]) ->
-    {ok, json()} | {error, decode_error()}.
+    "them is; `copy` gives every string its own binary.\n\n"
+    "`{keys, binary | atom | existing_atom}`. With `binary` (the default), "
+    "object keys decode to binaries. `atom` decodes them to atoms, creating "
+    "any that do not exist yet: atoms are never garbage collected and the "
+    "atom table is fixed in size, so use it only with trusted input. "
+    "`existing_atom` decodes them to atoms that already exist and returns "
+    "`{error, nonexistent_atom}` for a key that names none. An atom name "
+    "has at most 255 characters, so with `atom` a longer key returns "
+    "`{error, atom_too_long}`.").
+-spec decode(binary(), [{strings, reference | copy} | {keys, binary | atom | existing_atom}]) ->
+    {ok, json(binary() | atom())} | {error, decode_error()}.
 decode(Json, Opts) when is_binary(Json), is_list(Opts) ->
-    check_opts(Opts, [strings]),
+    check_opts(Opts, [strings, keys]),
     Copy =
         case proplists:get_value(strings, Opts, reference) of
             reference -> false;
             copy -> true;
             Other -> erlang:error({invalid_option, {strings, Other}})
         end,
+    Keys =
+        case proplists:get_value(keys, Opts, binary) of
+            Keys0 when Keys0 =:= binary; Keys0 =:= atom; Keys0 =:= existing_atom -> Keys0;
+            Keys0 -> erlang:error({invalid_option, {keys, Keys0}})
+        end,
     case byte_size(Json) > ?TIMESLICE_BYTES of
-        true -> ?NIF:decode_opts_dirty(Json, Copy, null);
-        false -> ?NIF:decode_opts(Json, Copy, null)
+        true -> ?NIF:decode_opts_dirty(Json, Copy, Keys, null);
+        false -> ?NIF:decode_opts(Json, Copy, Keys, null)
     end.
 
 ?DOC("Same as `encode(Term, [])`.").

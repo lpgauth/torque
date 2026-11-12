@@ -13,9 +13,10 @@ use rustler::sys::{
     enif_make_map_put, enif_make_new_map, enif_make_sub_binary, enif_system_info, ErlNifSysInfo,
     ERL_NIF_TERM,
 };
-use rustler::{Encoder, Env, NewBinary, Term};
+use rustler::{Atom, Encoder, Env, NewBinary, NifUnitEnum, Term};
 use sonic_rs::JsonVisitor;
 use std::cell::RefCell;
+use std::marker::PhantomData;
 use std::sync::OnceLock;
 
 use crate::atoms;
@@ -222,7 +223,47 @@ pub(crate) enum Strings {
     Copy,
 }
 
-pub(crate) struct TermBuilder<'env, 'bufs> {
+/// What `decode_to_term` makes of object keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, NifUnitEnum)]
+pub(crate) enum ObjectKeys {
+    /// A binary, built like any other string.
+    Binary,
+    /// An atom, created when none exists.
+    Atom,
+    /// An existing atom; a key naming none fails the parse.
+    ExistingAtom,
+}
+
+/// What a `TermBuilder` makes of object keys. It is a type parameter rather
+/// than a field so that the parser is compiled once per kind, and the
+/// binary-key parse carries no atom checks.
+pub(crate) trait KeyKind {
+    /// How a key becomes an atom, or `None` when keys stay binaries.
+    const ATOMS: Option<AtomLookup>;
+}
+
+/// `ObjectKeys::Binary` as a `KeyKind`.
+pub(crate) enum BinaryKeys {}
+
+impl KeyKind for BinaryKeys {
+    const ATOMS: Option<AtomLookup> = None;
+}
+
+/// `ObjectKeys::Atom` as a `KeyKind`.
+pub(crate) enum AtomKeys {}
+
+impl KeyKind for AtomKeys {
+    const ATOMS: Option<AtomLookup> = Some(AtomLookup::CreateMissing);
+}
+
+/// `ObjectKeys::ExistingAtom` as a `KeyKind`.
+pub(crate) enum ExistingAtomKeys {}
+
+impl KeyKind for ExistingAtomKeys {
+    const ATOMS: Option<AtomLookup> = Some(AtomLookup::ExistingOnly);
+}
+
+pub(crate) struct TermBuilder<'env, 'bufs, K: KeyKind = BinaryKeys> {
     env: Env<'env>,
     input: InputRef,
     strings: Strings,
@@ -248,9 +289,12 @@ pub(crate) struct TermBuilder<'env, 'bufs> {
     null: ERL_NIF_TERM,
     empty_map: ERL_NIF_TERM,
     too_deep: bool,
+    /// How the key that stopped the parse was looked up, when one did.
+    failed_key: Option<AtomLookup>,
+    key_kind: PhantomData<K>,
 }
 
-impl<'env, 'bufs> TermBuilder<'env, 'bufs> {
+impl<'env, 'bufs, K: KeyKind> TermBuilder<'env, 'bufs, K> {
     /// Terms of the values parsed so far, in order. Each parse driven through
     /// the builder leaves exactly one.
     #[inline]
@@ -327,17 +371,18 @@ impl<'env, 'bufs> TermBuilder<'env, 'bufs> {
         term.as_c_arg()
     }
 
-    /// Term for an object key, memoized in the per-call key cache.
+    /// Term for an object key, memoized in the per-call key cache. `None` when
+    /// the key has no atom `K` allows.
     ///
     /// Only borrowed keys qualify: an escaped key's bytes live in the parser's
     /// scratch buffer, which later strings overwrite, so its pointer can't be
-    /// used as a cache identity. Those (rare) keys fall back to `str_term`.
+    /// used as a cache identity. Those (rare) keys bypass the cache.
     /// `wide` is the key's offset in the input when it starts at least 8 bytes
     /// before the end, so `prefix` came from one unaligned load; a key inside
     /// the final 8 bytes of the document (impossible in valid JSON, which needs
     /// at least `":x}` after it) just falls back.
     #[inline]
-    fn key_term(&mut self, s: &str, wide: Option<usize>, prefix: u64) -> ERL_NIF_TERM {
+    fn key_term(&mut self, s: &str, wide: Option<usize>, prefix: u64) -> Option<ERL_NIF_TERM> {
         let ptr = s.as_ptr();
         let len = s.len();
         let offset = match wide {
@@ -348,7 +393,7 @@ impl<'env, 'bufs> TermBuilder<'env, 'bufs> {
             {
                 offset
             }
-            _ => return self.str_term(s),
+            _ => return self.uncached_key_term(s),
         };
         // Schema keys often share their first 8 bytes and length
         // (`profile_link_color`, `profile_text_color`), so mix in the last 8
@@ -375,18 +420,22 @@ impl<'env, 'bufs> TermBuilder<'env, 'bufs> {
                 })
         {
             self.keys.debit -= 8;
-            return entry.term;
+            return Some(entry.term);
         }
         self.keys.debit += 1;
-        // len <= KEY_CACHE_MAX_LEN (64), so either way this is an on-heap
-        // binary, not refc.
-        let term = if sub_binaries_copy_keys() {
-            // SAFETY: `wide` is the key's offset inside the input binary.
-            unsafe { enif_make_sub_binary(self.env.as_c_arg(), self.input.term, offset, len) }
-        } else {
-            let mut binary = NewBinary::new(self.env, len);
-            binary.as_mut_slice().copy_from_slice(s.as_bytes());
-            Term::from(binary).as_c_arg()
+        let term = match K::ATOMS {
+            Some(lookup) => atom_term(self.env, s.as_bytes(), lookup)?,
+            // len <= KEY_CACHE_MAX_LEN (64), so either way this is an on-heap
+            // binary, not refc.
+            None if sub_binaries_copy_keys() => {
+                // SAFETY: `wide` is the key's offset inside the input binary.
+                unsafe { enif_make_sub_binary(self.env.as_c_arg(), self.input.term, offset, len) }
+            }
+            None => {
+                let mut binary = NewBinary::new(self.env, len);
+                binary.as_mut_slice().copy_from_slice(s.as_bytes());
+                Term::from(binary).as_c_arg()
+            }
         };
         self.keys.entries[slot] = KeyEntry {
             ptr,
@@ -396,8 +445,76 @@ impl<'env, 'bufs> TermBuilder<'env, 'bufs> {
             len: len as u32,
             epoch: self.keys.epoch,
         };
-        term
+        Some(term)
     }
+
+    /// `key_term` for a key the cache cannot hold.
+    #[inline]
+    fn uncached_key_term(&mut self, s: &str) -> Option<ERL_NIF_TERM> {
+        match K::ATOMS {
+            Some(lookup) => atom_term(self.env, s.as_bytes(), lookup),
+            None => Some(self.str_term(s)),
+        }
+    }
+}
+
+/// The longest atom name, in characters.
+const MAX_ATOM_CHARACTERS: usize = 255;
+
+/// Whether `atom_term` may add the atom it names to the atom table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AtomLookup {
+    CreateMissing,
+    ExistingOnly,
+}
+
+/// The atom named by `name`. `None` when it does not exist and `lookup` may
+/// not create it, or when the name is too long for an atom.
+#[inline]
+fn atom_term(env: Env, name: &[u8], lookup: AtomLookup) -> Option<ERL_NIF_TERM> {
+    if !name.is_ascii() {
+        return utf8_atom_term(env, name, lookup);
+    }
+    // Checked here because `enif_make_atom_len` raises badarg past the limit
+    // instead of failing.
+    if name.len() > MAX_ATOM_CHARACTERS {
+        return None;
+    }
+    let atom = match lookup {
+        AtomLookup::CreateMissing => Atom::from_bytes(env, name),
+        AtomLookup::ExistingOnly => Atom::existing_from_bytes(env, name),
+    };
+    atom.ok().map(|a| a.as_c_arg())
+}
+
+/// External term format tag for an atom with a UTF-8 name of up to 65535
+/// bytes.
+const ATOM_UTF8_EXT: u8 = 118;
+
+/// `atom_term` for a name outside ASCII, through the external term format: the
+/// atom functions take UTF-8 names only from NIF 2.17, and the NIF still loads
+/// on 2.15.
+#[cold]
+#[inline(never)]
+fn utf8_atom_term(env: Env, name: &[u8], lookup: AtomLookup) -> Option<ERL_NIF_TERM> {
+    // At most four bytes per character; ERTS rejects a name with more than
+    // MAX_ATOM_CHARACTERS of them.
+    if name.len() > 4 * MAX_ATOM_CHARACTERS {
+        return None;
+    }
+    let mut etf = [0u8; 4 + 4 * MAX_ATOM_CHARACTERS];
+    etf[0] = ETF_VERSION;
+    etf[1] = ATOM_UTF8_EXT;
+    etf[2..4].copy_from_slice(&(name.len() as u16).to_be_bytes());
+    etf[4..4 + name.len()].copy_from_slice(name);
+    let etf = &etf[..4 + name.len()];
+    let decoded = match lookup {
+        // SAFETY: the buffer holds one atom, and creating it is the point.
+        AtomLookup::CreateMissing => unsafe { env.binary_to_term_trusted(etf) },
+        // The safe decode creates no atoms, so it finds only existing ones.
+        AtomLookup::ExistingOnly => env.binary_to_term(etf),
+    };
+    decoded.map(|(term, _)| term.as_c_arg())
 }
 
 /// Stable insertion sort of member indices into Erlang term order, or `None`
@@ -529,7 +646,7 @@ fn bignum_term_large(env: Env, raw: &str) -> Option<ERL_NIF_TERM> {
     rustler::BigInt::parse_bytes(raw.as_bytes(), 10).map(|big| big.encode(env).as_c_arg())
 }
 
-impl<'de, 'env, 'bufs> JsonVisitor<'de> for TermBuilder<'env, 'bufs> {
+impl<'de, 'env, 'bufs, K: KeyKind> JsonVisitor<'de> for TermBuilder<'env, 'bufs, K> {
     #[inline]
     fn visit_dom_start(&mut self) -> bool {
         true
@@ -610,16 +727,31 @@ impl<'de, 'env, 'bufs> JsonVisitor<'de> for TermBuilder<'env, 'bufs> {
             b[..n].copy_from_slice(&key.as_bytes()[..n]);
             u64::from_le_bytes(b)
         };
-        self.ords.push(KeyOrd {
-            prefix: prefix.swap_bytes(),
-            ptr: if offset.is_some() {
-                key.as_ptr()
-            } else {
-                std::ptr::null()
-            },
-            len,
-        });
-        let t = self.key_term(key, wide, prefix);
+        let ptr = if offset.is_some() {
+            key.as_ptr()
+        } else {
+            std::ptr::null()
+        };
+        if K::ATOMS.is_none() {
+            self.ords.push(KeyOrd {
+                prefix: prefix.swap_bytes(),
+                ptr,
+                len,
+            });
+        }
+        let Some(t) = self.key_term(key, wide, prefix) else {
+            self.failed_key = K::ATOMS;
+            return false;
+        };
+        if K::ATOMS.is_some() {
+            // From OTP 26, ERTS orders a small map's atom keys by atom table
+            // index, which is the order of the raw terms.
+            self.ords.push(KeyOrd {
+                prefix: t as u64,
+                ptr,
+                len,
+            });
+        }
         self.key_terms.push(t);
         true
     }
@@ -695,13 +827,13 @@ impl<'de, 'env, 'bufs> JsonVisitor<'de> for TermBuilder<'env, 'bufs> {
 /// Runs `f` with a term builder over the binary `input_term`, whose bytes are
 /// `bytes`, on this scheduler thread's reused stacks and key cache. JSON null
 /// becomes `null`.
-pub(crate) fn with_term_builder<'env, R>(
+pub(crate) fn with_term_builder<'env, K: KeyKind, R>(
     env: Env<'env>,
     input_term: ERL_NIF_TERM,
     bytes: &[u8],
     strings: Strings,
     null: ERL_NIF_TERM,
-    f: impl for<'bufs> FnOnce(&mut TermBuilder<'env, 'bufs>) -> R,
+    f: impl for<'bufs> FnOnce(&mut TermBuilder<'env, 'bufs, K>) -> R,
 ) -> R {
     let input = InputRef {
         term: input_term,
@@ -740,6 +872,8 @@ pub(crate) fn with_term_builder<'env, R>(
             null,
             empty_map: 0,
             too_deep: false,
+            failed_key: None,
+            key_kind: PhantomData,
         };
         let result = f(&mut builder);
         // The terms live in the environment; the handles here are dead now.
@@ -752,20 +886,18 @@ pub(crate) fn with_term_builder<'env, R>(
 }
 
 /// Build the `{:error, _}` term for a failed parse through `builder`.
-pub(crate) fn builder_error_term<'a>(
+pub(crate) fn builder_error_term<'a, K: KeyKind>(
     env: Env<'a>,
-    builder: &TermBuilder,
+    builder: &TermBuilder<K>,
     err: &sonic_rs::Error,
 ) -> Term<'a> {
-    if builder.too_deep {
-        make_tuple2(
-            env,
-            atoms::error().as_c_arg(),
-            atoms::nesting_too_deep().as_c_arg(),
-        )
-    } else {
-        parse_error_term(env, err)
-    }
+    let reason = match (builder.too_deep, builder.failed_key) {
+        (true, _) => atoms::nesting_too_deep(),
+        (false, Some(AtomLookup::ExistingOnly)) => atoms::nonexistent_atom(),
+        (false, Some(AtomLookup::CreateMissing)) => atoms::atom_too_long(),
+        (false, None) => return parse_error_term(env, err),
+    };
+    make_tuple2(env, atoms::error().as_c_arg(), reason.as_c_arg())
 }
 
 /// Decodes a whole document. With `Strings::Borrow`, strings the parser did
@@ -776,9 +908,26 @@ pub fn decode_to_term<'a>(
     input_term: ERL_NIF_TERM,
     bytes: &[u8],
     strings: Strings,
+    object_keys: ObjectKeys,
     null: ERL_NIF_TERM,
 ) -> Term<'a> {
-    with_term_builder(env, input_term, bytes, strings, null, |builder| {
+    match object_keys {
+        ObjectKeys::Binary => decode_keys_as::<BinaryKeys>(env, input_term, bytes, strings, null),
+        ObjectKeys::Atom => decode_keys_as::<AtomKeys>(env, input_term, bytes, strings, null),
+        ObjectKeys::ExistingAtom => {
+            decode_keys_as::<ExistingAtomKeys>(env, input_term, bytes, strings, null)
+        }
+    }
+}
+
+fn decode_keys_as<'a, K: KeyKind>(
+    env: Env<'a>,
+    input_term: ERL_NIF_TERM,
+    bytes: &[u8],
+    strings: Strings,
+    null: ERL_NIF_TERM,
+) -> Term<'a> {
+    with_term_builder::<K, _>(env, input_term, bytes, strings, null, |builder| {
         match sonic_rs::parse_into_visitor(bytes, builder) {
             Ok(()) => match builder.values.first() {
                 Some(&root) => make_tuple2(env, atoms::ok().as_c_arg(), root),

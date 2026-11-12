@@ -272,7 +272,122 @@ defmodule Torque.DecodeTest do
 
     test "invalid options raise" do
       assert_raise ArgumentError, fn -> Torque.decode("1", strings: :bogus) end
-      assert_raise ArgumentError, fn -> Torque.decode("1", keys: :atoms) end
+      assert_raise ArgumentError, fn -> Torque.decode("1", bogus: true) end
+    end
+  end
+
+  describe "decode/2 keys option" do
+    defp atomize(term) when is_map(term),
+      do: Map.new(term, fn {k, v} -> {String.to_atom(k), atomize(v)} end)
+
+    defp atomize(term) when is_list(term), do: Enum.map(term, &atomize/1)
+    defp atomize(term), do: term
+
+    defp records(n) do
+      "[" <>
+        Enum.map_join(1..n, ",", fn i ->
+          ~s({"id":#{i},"name":"n#{i}","tags":[{"k":"v"}],"meta":{},"one":{"x":null}})
+        end) <> "]"
+    end
+
+    defp fresh_key(prefix), do: "#{prefix}_#{System.unique_integer([:positive])}"
+
+    # Two records stay on the normal scheduler; 500 cross the 20 KB dirty limit.
+    test "keys: :atoms and :atoms! decode keys to atoms" do
+      for n <- [2, 500] do
+        json = records(n)
+        expected = atomize(Torque.decode!(json))
+        assert {:ok, ^expected} = Torque.decode(json, keys: :atoms)
+        assert {:ok, ^expected} = Torque.decode(json, keys: :atoms!)
+        assert {:ok, ^expected} = Torque.decode(json, keys: :atoms, strings: :copy)
+      end
+    end
+
+    test "keys: :strings is the default" do
+      json = records(2)
+      assert Torque.decode(json, keys: :strings) == Torque.decode(json)
+    end
+
+    test "escaped and non-ASCII keys" do
+      assert {:ok, %{ab: 1, é: 2, 日本: 3, "": 4}} =
+               Torque.decode(~s({"a\\u0062":1,"é":2,"\\u65e5本":3,"":4}), keys: :atoms)
+    end
+
+    # The key cache holds keys of 1 to 64 bytes; the rest bypass it.
+    test "keys on either side of the key cache's length limit" do
+      keys = [String.duplicate("q", 64), String.duplicate("r", 65)]
+      record = "{" <> Enum.map_join(keys, ",", &~s("#{&1}":1)) <> "}"
+      expected = Map.new(keys, &{String.to_atom(&1), 1})
+      assert {:ok, [^expected, ^expected]} = Torque.decode("[#{record},#{record}]", keys: :atoms)
+    end
+
+    test "an atom name has at most 255 characters, whatever their encoding" do
+      for char <- ["a", "é", "😀"] do
+        key = String.duplicate(char, 255)
+        assert {:ok, %{} = map} = Torque.decode(~s({"#{key}":1}), keys: :atoms)
+        assert [atom] = Map.keys(map)
+        assert Atom.to_string(atom) == key
+
+        long = key <> char
+        assert {:error, :atom_too_long} = Torque.decode(~s({"#{long}":1}), keys: :atoms)
+        assert {:error, :nonexistent_atom} = Torque.decode(~s({"#{long}":1}), keys: :atoms!)
+      end
+    end
+
+    test "keys: :atoms! rejects a key that names no atom" do
+      for key <- [fresh_key("ascii"), fresh_key("ünïcode")] do
+        assert {:error, :nonexistent_atom} = Torque.decode(~s({"id":{"#{key}":1}}), keys: :atoms!)
+
+        assert_raise ArgumentError, ~r/nonexistent_atom/, fn ->
+          Torque.decode!(~s({"#{key}":1}), keys: :atoms!)
+        end
+
+        assert {:ok, %{}} = Torque.decode(~s({"#{key}":1}), keys: :atoms)
+        assert {:ok, %{}} = Torque.decode(~s({"#{key}":1}), keys: :atoms!)
+      end
+
+      escaped = fresh_key("\\u00e9")
+      assert {:error, :nonexistent_atom} = Torque.decode(~s({"#{escaped}":1}), keys: :atoms!)
+    end
+
+    test "the last of duplicate keys wins" do
+      assert {:ok, %{a: 3, b: 2, c: 4, d: 5}} =
+               Torque.decode(~s({"a":1,"b":2,"a":3,"c":4,"d":5}), keys: :atoms)
+
+      pairs = Enum.map_join(1..40, ",", &~s("k#{&1}":#{&1})) <> ~s(,"k7":0)
+      assert {:ok, map} = Torque.decode("{#{pairs}}", keys: :atoms)
+      assert map_size(map) == 40
+      assert map.k7 == 0
+    end
+
+    # Small maps keep their keys sorted. A map whose atoms were created in an
+    # order other than the document's, mixed with long-standing atoms, has to
+    # come out sorted for lookups to find them.
+    test "maps answer lookups for every key whatever the atoms' creation order" do
+      fresh = for _ <- 1..6, do: fresh_key("order")
+      Enum.each(Enum.reverse(fresh), &String.to_atom/1)
+
+      for keys <- [fresh ++ ["id", "name", "error"], Enum.reverse(fresh) ++ ["ok", "id"]],
+          count <- [4, length(keys)] do
+        keys = Enum.take(keys, count)
+
+        json =
+          "{" <>
+            Enum.map_join(Enum.with_index(keys), ",", fn {k, i} -> ~s("#{k}":#{i}) end) <> "}"
+
+        assert {:ok, map} = Torque.decode(json, keys: :atoms!)
+
+        for {key, i} <- Enum.with_index(keys) do
+          assert Map.fetch!(map, String.to_existing_atom(key)) == i
+        end
+
+        assert map == Map.new(Enum.with_index(keys), fn {k, i} -> {String.to_atom(k), i} end)
+      end
+    end
+
+    test "invalid values raise" do
+      assert_raise ArgumentError, fn -> Torque.decode("1", keys: :bogus) end
+      assert_raise ArgumentError, fn -> Torque.decode("1", keys: "atoms") end
     end
   end
 

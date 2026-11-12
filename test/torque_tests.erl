@@ -23,6 +23,24 @@ decode_test() ->
     ?assertEqual(80, binary:referenced_byte_size(S)),
     ?assertMatch({error, Msg} when is_binary(Msg), torque:decode(<<"{oops">>)).
 
+decode_keys_test() ->
+    ?assertEqual(
+        {ok, #{a => null, b => [1, 2], c => #{d => <<"x">>}}},
+        torque:decode(?JSON, [{keys, atom}])
+    ),
+    {ok, [First | _]} = torque:decode(large(), [{keys, existing_atom}]),
+    ?assertEqual(#{i => 1, n => null}, First),
+    ?assertEqual(torque:decode(?JSON), torque:decode(?JSON, [{keys, binary}])),
+    Absent = integer_to_binary(erlang:unique_integer([positive])),
+    ?assertEqual(
+        {error, nonexistent_atom},
+        torque:decode(<<"{\"absent_", Absent/binary, "\":1}">>, [{keys, existing_atom}])
+    ),
+    Long = binary:copy(<<"k">>, 256),
+    ?assertEqual(
+        {error, atom_too_long}, torque:decode(<<"{\"", Long/binary, "\":1}">>, [{keys, atom}])
+    ).
+
 encode_test() ->
     ?assertEqual({ok, <<"[null,\"nil\",true]">>}, torque:encode([null, nil, true])),
     ?assertEqual({ok, <<"{\"k\":null}">>}, torque:encode({[{<<"k">>, null}]})),
@@ -86,5 +104,6 @@ compiled_pointers_test() ->
 invalid_options_test() ->
     ?assertError({invalid_option, _}, torque:decode(<<"1">>, [{bogus, 1}])),
     ?assertError({invalid_option, _}, torque:decode(<<"1">>, [{strings, bogus}])),
+    ?assertError({invalid_option, _}, torque:decode(<<"1">>, [{keys, atoms}])),
     ?assertError({invalid_option, _}, torque:encode(1, [bogus])),
     ?assertError({invalid_option, _}, torque:parse(<<"1">>, [{validate, false}])).
