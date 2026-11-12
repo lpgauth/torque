@@ -8,8 +8,9 @@ Elixir `Torque` module and follows Erlang conventions:
   `undefined`, so it stays distinct from a JSON null.
 - Results are `{ok, _} | {error, _}` tuples; options are proplists, and an
   unknown option raises `{invalid_option, Opt}`.
-- Objects decode to maps with binary keys, arrays to lists and strings to
-  binaries. Integers outside the 64-bit range decode as exact bignums.
+- Objects decode to maps with binary keys (atom keys with `decode/2`'s
+  `keys` option), arrays to lists and strings to binaries. Integers outside
+  the 64-bit range decode as exact bignums.
 - Inputs larger than 20 KB run on a dirty CPU scheduler.
 
 Documents and pointer handles answer with the atoms of the API that created
@@ -44,16 +45,27 @@ Same as `decode(Json, [])`.
 
 ### `decode(Json, Opts) -> {ok, json()} | {error, Reason}`
 
-Decodes a JSON binary. `Reason` is a message binary for malformed input, or
-`nesting_too_deep` past 128 levels.
+Decodes a JSON binary. `Reason` is a message binary for malformed input,
+`nesting_too_deep` past 128 levels, or one of the `keys` option's reasons
+below.
 
-Options: `{strings, reference | copy}`. With `reference` (the default), strings
-longer than 64 bytes that needed no unescaping are sub-binaries of `Json`,
-which keeps all of it alive while any of them is; `copy` gives every string its
-own binary.
+Options:
+
+- `{strings, reference | copy}`. With `reference` (the default), strings
+  longer than 64 bytes that needed no unescaping are sub-binaries of `Json`,
+  which keeps all of it alive while any of them is; `copy` gives every string
+  its own binary.
+- `{keys, binary | atom | existing_atom}`. With `binary` (the default), object
+  keys decode to binaries. `atom` decodes them to atoms, creating any that do
+  not exist yet. Atoms are never garbage collected and the atom table is fixed
+  in size, so use it only with trusted input. `existing_atom` decodes them to
+  atoms that already exist and returns `{error, nonexistent_atom}` for a key
+  that names none. An atom name has at most 255 characters, so with `atom` a
+  longer key returns `{error, atom_too_long}`.
 
 ```erlang
 {ok, #{<<"a">> := null, <<"b">> := [1, 2]}} = torque:decode(<<"{\"a\":null,\"b\":[1,2]}">>).
+{ok, #{a := null, b := [1, 2]}} = torque:decode(<<"{\"a\":null,\"b\":[1,2]}">>, [{keys, atom}]).
 ```
 
 ## Encoding

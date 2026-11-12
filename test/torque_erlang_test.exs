@@ -21,6 +21,18 @@ defmodule Torque.ErlangTest do
       assert {:ok, _} = :torque.decode(@json, strings: :reference)
     end
 
+    test "accepts the keys option" do
+      assert {:ok, %{a: :null, b: [1, 2], c: %{d: "x"}}} = :torque.decode(@json, keys: :atom)
+      assert {:ok, %{a: :null}} = :torque.decode(~s({"a":null}), keys: :existing_atom)
+      assert {:ok, %{"a" => :null}} = :torque.decode(~s({"a":null}), keys: :binary)
+      assert {:ok, [%{i: 1, n: :null} | _]} = :torque.decode(@large, keys: :existing_atom)
+
+      key = "absent_#{System.unique_integer([:positive])}"
+      assert {:error, :nonexistent_atom} = :torque.decode(~s({"#{key}":1}), keys: :existing_atom)
+      long = String.duplicate("k", 256)
+      assert {:error, :atom_too_long} = :torque.decode(~s({"#{long}":1}), keys: :atom)
+    end
+
     test "returns errors as tuples" do
       assert {:error, message} = :torque.decode("{oops")
       assert is_binary(message)

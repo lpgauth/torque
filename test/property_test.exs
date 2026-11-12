@@ -485,6 +485,21 @@ defmodule Torque.PropertyTest do
     end
   end
 
+  describe "decode keys option" do
+    # Up to 40 keys covers hash maps as well as sorted small maps.
+    property "keys: :atoms and :atoms! decode what Jason decodes with keys: :atoms" do
+      check all(
+              term <-
+                one_of([json_term(), map_of(json_key(), json_scalar_exact(), max_length: 40)])
+            ) do
+        json = Jason.encode!(term)
+        expected = Jason.decode!(json, keys: :atoms)
+        assert {:ok, ^expected} = Torque.decode(json, keys: :atoms)
+        assert {:ok, ^expected} = Torque.decode(json, keys: :atoms!)
+      end
+    end
+  end
+
   # ---- Nesting depth limit ----
 
   describe "nesting depth limit (128)" do

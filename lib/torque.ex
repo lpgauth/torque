@@ -55,7 +55,7 @@ defmodule Torque do
 
   | JSON | Elixir |
   |------|--------|
-  | object | map with binary keys |
+  | object | map with binary keys (atom keys with `decode/2`'s `:keys`) |
   | array | list |
   | string | binary |
   | integer | integer |
@@ -111,6 +111,14 @@ defmodule Torque do
       is. `:copy` gives every string its own binary: use it when only a small
       part of a large document outlives the call.
 
+    * `:keys`: `:strings` (the default) decodes object keys to binaries.
+      `:atoms` decodes them to atoms, creating any that do not exist yet.
+      Atoms are never garbage collected and the atom table is fixed in size,
+      so use it only with trusted input. `:atoms!` decodes them to atoms
+      that already exist and returns `{:error, :nonexistent_atom}` for a key
+      that names none. An atom name has at most 255 characters, so with
+      `:atoms` a longer key returns `{:error, :atom_too_long}`.
+
   Any other option raises `ArgumentError`.
 
   ## Examples
@@ -124,11 +132,16 @@ defmodule Torque do
       iex> Torque.decode(~s({"a":"hello"}), strings: :copy)
       {:ok, %{"a" => "hello"}}
 
+      iex> Torque.decode(~s({"id":1,"tags":[{"name":"x"}]}), keys: :atoms)
+      {:ok, %{id: 1, tags: [%{name: "x"}]}}
+
       iex> match?({:error, _}, Torque.decode("invalid"))
       true
   """
   @doc group: :decode
-  @spec decode(binary(), keyword()) :: {:ok, term()} | {:error, binary() | :nesting_too_deep}
+  @spec decode(binary(), keyword()) ::
+          {:ok, term()}
+          | {:error, binary() | :nesting_too_deep | :nonexistent_atom | :atom_too_long}
   def decode(json, opts \\ [])
 
   def decode(json, []) when is_binary(json) and byte_size(json) > @timeslice_bytes do
@@ -140,24 +153,34 @@ defmodule Torque do
   end
 
   def decode(json, opts) when is_binary(json) and byte_size(json) > @timeslice_bytes do
-    Torque.Native.decode_opts_dirty(json, copy_strings!(opts), nil)
+    {copy_strings, object_keys} = decode_options!(opts)
+    Torque.Native.decode_opts_dirty(json, copy_strings, object_keys, nil)
   end
 
   def decode(json, opts) when is_binary(json) do
-    Torque.Native.decode_opts(json, copy_strings!(opts), nil)
+    {copy_strings, object_keys} = decode_options!(opts)
+    Torque.Native.decode_opts(json, copy_strings, object_keys, nil)
   end
 
-  defp copy_strings!(opts) do
-    case Keyword.validate!(opts, strings: :reference)[:strings] do
-      :reference ->
-        false
+  defp decode_options!(opts) do
+    validated = Keyword.validate!(opts, strings: :reference, keys: :strings)
+    {copy_strings!(validated[:strings]), object_keys!(validated[:keys])}
+  end
 
-      :copy ->
-        true
+  defp copy_strings!(:reference), do: false
+  defp copy_strings!(:copy), do: true
 
-      other ->
-        raise ArgumentError, "expected :strings to be :reference or :copy, got: #{inspect(other)}"
-    end
+  defp copy_strings!(other) do
+    raise ArgumentError, "expected :strings to be :reference or :copy, got: #{inspect(other)}"
+  end
+
+  defp object_keys!(:strings), do: :binary
+  defp object_keys!(:atoms), do: :atom
+  defp object_keys!(:atoms!), do: :existing_atom
+
+  defp object_keys!(other) do
+    raise ArgumentError,
+          "expected :keys to be :strings, :atoms or :atoms!, got: #{inspect(other)}"
   end
 
   @doc """

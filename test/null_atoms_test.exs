@@ -11,10 +11,10 @@ defmodule Torque.NullAtomsTest do
 
   test "decode turns JSON null into the given atom" do
     assert {:ok, %{"n" => :null, "box" => [:null, 1], "deep" => %{"m" => [:null]}}} =
-             Native.decode_opts(@json, false, :null)
+             Native.decode_opts(@json, false, :binary, :null)
 
     big = "[" <> Enum.map_join(1..3000, ",", fn _ -> "null" end) <> "]"
-    assert {:ok, list} = Native.decode_opts_dirty(big, true, :null)
+    assert {:ok, list} = Native.decode_opts_dirty(big, true, :binary, :null)
     assert Enum.all?(list, &(&1 == :null))
   end
 
