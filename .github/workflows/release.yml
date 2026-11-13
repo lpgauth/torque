@@ -154,13 +154,16 @@ jobs:
       # Runs the suite against the exact library this job ships. Only the PGO
       # jobs can: their runner matches the target and already has Elixir. The
       # compile builds a throwaway NIF (the draft release has nothing to
-      # download yet), which the shipped one then replaces.
+      # download yet), which the shipped one then replaces. Its RUSTFLAGS
+      # replace the crate's target-cpu=native, which also applies to the proc
+      # macros this host build compiles: rust-cache restores them on runners
+      # with other CPUs, where rustc loading one died with SIGILL.
       - name: Test the built library
         if: matrix.job.pgo
         shell: bash
         run: |
           set -euo pipefail
-          export TORQUE_BUILD=true MIX_ENV=test
+          export TORQUE_BUILD=true MIX_ENV=test RUSTFLAGS="${{ matrix.job.rustflags }}"
           mix deps.get
           mix compile
           EXT=so; [[ "${{ matrix.job.target }}" == *darwin* ]] && EXT=dylib
