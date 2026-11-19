@@ -133,6 +133,10 @@ large_extract = fn ->
 end
 
 Enum.each(1..5_000, fn _ -> decode.() end)
+# `floats: :decimals` unprofiled cost the small payload 28% over native floats
+# instead of 13%. Light on the large one, for the reason given below.
+Enum.each(1..2_000, fn _ -> Torque.decode!(small_json, floats: :decimals) end)
+Enum.each(1..100, fn _ -> Torque.decode!(large_json, floats: :decimals) end)
 Enum.each(1..5_000, fn _ -> encode.() end)
 Enum.each(1..10_000, fn _ -> parse_get.() end)
 Enum.each(1..10_000, fn _ -> compiled_get.() end)

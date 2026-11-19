@@ -91,8 +91,8 @@ decode(Json, Opts) when is_binary(Json), is_list(Opts) ->
             Keys0 -> erlang:error({invalid_option, {keys, Keys0}})
         end,
     case byte_size(Json) > ?TIMESLICE_BYTES of
-        true -> ?NIF:decode_opts_dirty(Json, Copy, Keys, null);
-        false -> ?NIF:decode_opts(Json, Copy, Keys, null)
+        true -> ?NIF:decode_opts_dirty(Json, Copy, Keys, native, null);
+        false -> ?NIF:decode_opts(Json, Copy, Keys, native, null)
     end.
 
 ?DOC("Same as `encode(Term, [])`.").

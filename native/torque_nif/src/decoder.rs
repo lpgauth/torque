@@ -1,6 +1,7 @@
 use crate::atoms;
 use crate::native_decode::{
-    self, builder_error_term, with_term_builder, BinaryKeys, ObjectKeys, Strings, TermBuilder,
+    self, builder_error_term, with_term_builder, BinaryKeys, Floats, ObjectKeys, Strings,
+    TermBuilder,
 };
 use crate::nif_util::{make_list, make_tuple2, timeslice_percent, REDUCTION_COUNT};
 use crate::types::{value_to_term, MAX_DEPTH};
@@ -365,6 +366,7 @@ fn decode<'a>(env: Env<'a>, json: Binary<'a>) -> Term<'a> {
         json.as_slice(),
         Strings::Borrow,
         ObjectKeys::Binary,
+        Floats::Native,
         atoms::nil().as_c_arg(),
     );
     schedule::consume_timeslice(env, timeslice_percent(json.len()));
@@ -380,6 +382,7 @@ fn decode_dirty<'a>(env: Env<'a>, json: Binary<'a>) -> Term<'a> {
         json.as_slice(),
         Strings::Borrow,
         ObjectKeys::Binary,
+        Floats::Native,
         atoms::nil().as_c_arg(),
     )
 }
@@ -390,6 +393,7 @@ fn decode_opts<'a>(
     json: Binary<'a>,
     copy_strings: bool,
     object_keys: ObjectKeys,
+    floats: Floats,
     null: Atom,
 ) -> Term<'a> {
     let input_term = json.encode(env).as_c_arg();
@@ -399,6 +403,7 @@ fn decode_opts<'a>(
         json.as_slice(),
         decode_strings(copy_strings),
         object_keys,
+        floats,
         null.as_c_arg(),
     );
     schedule::consume_timeslice(env, timeslice_percent(json.len()));
@@ -411,6 +416,7 @@ fn decode_opts_dirty<'a>(
     json: Binary<'a>,
     copy_strings: bool,
     object_keys: ObjectKeys,
+    floats: Floats,
     null: Atom,
 ) -> Term<'a> {
     let input_term = json.encode(env).as_c_arg();
@@ -420,6 +426,7 @@ fn decode_opts_dirty<'a>(
         json.as_slice(),
         decode_strings(copy_strings),
         object_keys,
+        floats,
         null.as_c_arg(),
     )
 }
@@ -662,6 +669,7 @@ fn do_parse_get_many_nil<'a>(
         bytes,
         Strings::Borrow,
         compiled.null.as_c_arg(),
+        Floats::Native,
         |builder| {
             let values = match sonic_rs::extract::extract_with(
                 bytes,

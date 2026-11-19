@@ -5,6 +5,7 @@ rustler::atoms! {
     nesting_too_deep,
     nonexistent_atom,
     atom_too_long,
+    exponent_too_large,
     nil,
     // atoms for fast identity comparison in encoder
     r#true = "true",
@@ -18,4 +19,9 @@ rustler::atoms! {
     unhandled_struct,
     // struct marker key (atom `__struct__` in Elixir structs)
     __struct__ = "__struct__",
+    // `Decimal`'s struct name and fields, for `floats: :decimals`
+    decimal = "Elixir.Decimal",
+    coef,
+    exp,
+    sign,
 }

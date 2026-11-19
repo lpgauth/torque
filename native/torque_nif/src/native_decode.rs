@@ -263,6 +263,15 @@ impl KeyKind for ExistingAtomKeys {
     const ATOMS: Option<AtomLookup> = Some(AtomLookup::ExistingOnly);
 }
 
+/// What `decode_to_term` makes of numbers with a fraction or an exponent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, NifUnitEnum)]
+pub(crate) enum Floats {
+    /// A float.
+    Native,
+    /// A `Decimal` struct built from the number's text.
+    Decimal,
+}
+
 pub(crate) struct TermBuilder<'env, 'bufs, K: KeyKind = BinaryKeys> {
     env: Env<'env>,
     input: InputRef,
@@ -291,6 +300,12 @@ pub(crate) struct TermBuilder<'env, 'bufs, K: KeyKind = BinaryKeys> {
     too_deep: bool,
     /// How the key that stopped the parse was looked up, when one did.
     failed_key: Option<AtomLookup>,
+    /// A float's exponent did not fit `Decimal`'s `exp` as built here.
+    exponent_too_large: bool,
+    /// A field where the key kind is a type parameter: a second parameter
+    /// doubled the parser copies and cost extraction about 2%, and a float is
+    /// rarer than a key.
+    floats: Floats,
     key_kind: PhantomData<K>,
 }
 
@@ -343,6 +358,20 @@ impl<'env, 'bufs, K: KeyKind> TermBuilder<'env, 'bufs, K> {
         // call writes.
         unsafe { enif_make_map_put(self.env.as_c_arg(), empty, key, value, &mut map) };
         map
+    }
+
+    #[inline]
+    fn push_decimal(&mut self, raw: &str) -> bool {
+        match decimal_term(self.env, raw) {
+            Some(term) => {
+                self.push(term);
+                true
+            }
+            None => {
+                self.exponent_too_large = true;
+                false
+            }
+        }
     }
 
     #[inline]
@@ -646,6 +675,108 @@ fn bignum_term_large(env: Env, raw: &str) -> Option<ERL_NIF_TERM> {
     rustler::BigInt::parse_bytes(raw.as_bytes(), 10).map(|big| big.encode(env).as_c_arg())
 }
 
+/// One of `Decimal`'s struct keys and where its value is in `decimal_term`'s
+/// `fields`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct DecimalKey {
+    atom: ERL_NIF_TERM,
+    field: usize,
+}
+
+/// `Decimal`'s struct keys in the order of their raw terms, which is the
+/// order ERTS keeps a small map's atom keys in from OTP 26, so it has nothing
+/// to sort.
+static DECIMAL_KEYS: OnceLock<[DecimalKey; 4]> = OnceLock::new();
+
+/// A `Decimal` struct for the float token `raw`, with the fields
+/// `Decimal.new/1` gives the same text: every digit kept, nothing normalized.
+/// `None` when the exponent is beyond what is built here.
+#[inline]
+fn decimal_term(env: Env, raw: &str) -> Option<ERL_NIF_TERM> {
+    let (sign, body) = match raw.as_bytes().split_first() {
+        Some((b'-', rest)) => (-1i64, rest),
+        _ => (1, raw.as_bytes()),
+    };
+    let mantissa_len = body
+        .iter()
+        .position(|b| matches!(b, b'e' | b'E'))
+        .unwrap_or(body.len());
+    let (mantissa, exponent) = body.split_at(mantissa_len);
+    let integer_len = mantissa
+        .iter()
+        .position(|&b| b == b'.')
+        .unwrap_or(mantissa.len());
+    let integer = &mantissa[..integer_len];
+    let fraction = mantissa.get(integer_len + 1..).unwrap_or(&[]);
+
+    let written = match exponent.split_first() {
+        Some((_, digits)) => written_exponent(digits)?,
+        None => 0,
+    };
+    let exp = written.checked_sub(fraction.len() as i64)?;
+
+    let small = integer.iter().chain(fraction).try_fold(0u64, |coef, &d| {
+        coef.checked_mul(10)?.checked_add((d - b'0') as u64)
+    });
+    let coef = match small {
+        Some(coef) => coef.encode(env).as_c_arg(),
+        None => big_coefficient(env, integer, fraction)?,
+    };
+
+    let keys = DECIMAL_KEYS.get_or_init(|| {
+        let names = [
+            atoms::__struct__(),
+            atoms::coef(),
+            atoms::exp(),
+            atoms::sign(),
+        ];
+        let mut field = 0;
+        let mut keys = names.map(|name| {
+            let key = DecimalKey {
+                atom: name.as_c_arg(),
+                field,
+            };
+            field += 1;
+            key
+        });
+        keys.sort_unstable();
+        keys
+    });
+    let fields = [
+        atoms::decimal().as_c_arg(),
+        coef,
+        exp.encode(env).as_c_arg(),
+        sign.encode(env).as_c_arg(),
+    ];
+    try_make_map(
+        env,
+        &keys.map(|key| key.atom),
+        &keys.map(|key| fields[key.field]),
+    )
+}
+
+/// The exponent written after a float token's `e`, when it fits.
+#[inline]
+fn written_exponent(digits: &[u8]) -> Option<i64> {
+    let (negative, digits) = match digits.split_first() {
+        Some((b'-', rest)) => (true, rest),
+        Some((b'+', rest)) => (false, rest),
+        _ => (false, digits),
+    };
+    let magnitude = digits.iter().try_fold(0i64, |exp, &d| {
+        exp.checked_mul(10)?.checked_add((d - b'0') as i64)
+    })?;
+    Some(if negative { -magnitude } else { magnitude })
+}
+
+/// A coefficient beyond `u64`, as a bignum of the token's digits.
+#[cold]
+#[inline(never)]
+fn big_coefficient(env: Env, integer: &[u8], fraction: &[u8]) -> Option<ERL_NIF_TERM> {
+    let digits = [integer, fraction].concat();
+    bignum_term(env, std::str::from_utf8(&digits).ok()?)
+}
+
 impl<'de, 'env, 'bufs, K: KeyKind> JsonVisitor<'de> for TermBuilder<'env, 'bufs, K> {
     #[inline]
     fn visit_dom_start(&mut self) -> bool {
@@ -689,6 +820,23 @@ impl<'de, 'env, 'bufs, K: KeyKind> JsonVisitor<'de> for TermBuilder<'env, 'bufs,
     fn visit_f64(&mut self, val: f64) -> bool {
         self.push(val.encode(self.env).as_c_arg());
         true
+    }
+
+    #[inline]
+    fn visit_float(&mut self, val: f64, raw: &str) -> bool {
+        if self.floats == Floats::Decimal {
+            return self.push_decimal(raw);
+        }
+        self.visit_f64(val)
+    }
+
+    #[inline]
+    fn accepts_huge_floats(&self) -> bool {
+        self.floats == Floats::Decimal
+    }
+
+    fn visit_huge_float(&mut self, raw: &str) -> bool {
+        self.push_decimal(raw)
     }
 
     /// Integer literal beyond i64/u64 range: an exact Erlang bignum from the
@@ -833,6 +981,7 @@ pub(crate) fn with_term_builder<'env, K: KeyKind, R>(
     bytes: &[u8],
     strings: Strings,
     null: ERL_NIF_TERM,
+    floats: Floats,
     f: impl for<'bufs> FnOnce(&mut TermBuilder<'env, 'bufs, K>) -> R,
 ) -> R {
     let input = InputRef {
@@ -873,6 +1022,8 @@ pub(crate) fn with_term_builder<'env, K: KeyKind, R>(
             empty_map: 0,
             too_deep: false,
             failed_key: None,
+            exponent_too_large: false,
+            floats,
             key_kind: PhantomData,
         };
         let result = f(&mut builder);
@@ -895,6 +1046,7 @@ pub(crate) fn builder_error_term<'a, K: KeyKind>(
         (true, _) => atoms::nesting_too_deep(),
         (false, Some(AtomLookup::ExistingOnly)) => atoms::nonexistent_atom(),
         (false, Some(AtomLookup::CreateMissing)) => atoms::atom_too_long(),
+        (false, None) if builder.exponent_too_large => atoms::exponent_too_large(),
         (false, None) => return parse_error_term(env, err),
     };
     make_tuple2(env, atoms::error().as_c_arg(), reason.as_c_arg())
@@ -909,13 +1061,18 @@ pub fn decode_to_term<'a>(
     bytes: &[u8],
     strings: Strings,
     object_keys: ObjectKeys,
+    floats: Floats,
     null: ERL_NIF_TERM,
 ) -> Term<'a> {
     match object_keys {
-        ObjectKeys::Binary => decode_keys_as::<BinaryKeys>(env, input_term, bytes, strings, null),
-        ObjectKeys::Atom => decode_keys_as::<AtomKeys>(env, input_term, bytes, strings, null),
+        ObjectKeys::Binary => {
+            decode_keys_as::<BinaryKeys>(env, input_term, bytes, strings, null, floats)
+        }
+        ObjectKeys::Atom => {
+            decode_keys_as::<AtomKeys>(env, input_term, bytes, strings, null, floats)
+        }
         ObjectKeys::ExistingAtom => {
-            decode_keys_as::<ExistingAtomKeys>(env, input_term, bytes, strings, null)
+            decode_keys_as::<ExistingAtomKeys>(env, input_term, bytes, strings, null, floats)
         }
     }
 }
@@ -926,8 +1083,9 @@ fn decode_keys_as<'a, K: KeyKind>(
     bytes: &[u8],
     strings: Strings,
     null: ERL_NIF_TERM,
+    floats: Floats,
 ) -> Term<'a> {
-    with_term_builder::<K, _>(env, input_term, bytes, strings, null, |builder| {
+    with_term_builder::<K, _>(env, input_term, bytes, strings, null, floats, |builder| {
         match sonic_rs::parse_into_visitor(bytes, builder) {
             Ok(()) => match builder.values.first() {
                 Some(&root) => make_tuple2(env, atoms::ok().as_c_arg(), root),

@@ -82,6 +82,7 @@ defmodule Torque.MixProject do
   defp deps do
     [
       {:benchee, "~> 1.3", only: :bench},
+      {:decimal, "~> 2.0", only: [:test, :bench]},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:ex_doc, "~> 0.35", only: :dev, runtime: false},
       {:glazer, "~> 1.1", only: :bench},
