@@ -14,6 +14,11 @@
 #     recover their digits from that error branch (`Parser::huge_int`). The
 #     checked skip still rejects them in unselected regions: accepting them
 #     there cost ~10% on number-heavy documents
+#   * `JsonVisitor::visit_float` hands a float token's source text over with
+#     its value (default forwards to `visit_f64`), and a visitor answering
+#     `accepts_huge_floats` gets a token beyond `f64`, such as `1e400`,
+#     through `visit_huge_float` from `parse_number`'s error branch
+#     (`Parser::huge_number`), so Torque can build exact decimals
 #   * object keys in the visitor parse (`parse_object`) are delivered via
 #     `visit_key`/`visit_borrowed_key` instead of the str hooks (defaults
 #     forward to the str hooks), so Torque can reuse the term for a key
