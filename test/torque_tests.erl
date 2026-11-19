@@ -41,6 +41,18 @@ decode_keys_test() ->
         {error, atom_too_long}, torque:decode(<<"{\"", Long/binary, "\":1}">>, [{keys, atom}])
     ).
 
+decode_floats_test() ->
+    ?assertEqual(
+        {ok, [#{'__struct__' => 'Elixir.Decimal', sign => -1, coef => 250, exp => -2}, 2, null]},
+        torque:decode(<<"[-2.50,2,null]">>, [{floats, decimal}])
+    ),
+    ?assertEqual({ok, 1.5}, torque:decode(<<"1.5">>, [{floats, native}])),
+    ?assertEqual(
+        {error, exponent_too_large},
+        torque:decode(<<"1e99999999999999999999">>, [{floats, decimal}])
+    ),
+    ?assertError({invalid_option, {floats, decimals}}, torque:decode(<<"1.5">>, [{floats, decimals}])).
+
 encode_test() ->
     ?assertEqual({ok, <<"[null,\"nil\",true]">>}, torque:encode([null, nil, true])),
     ?assertEqual({ok, <<"{\"k\":null}">>}, torque:encode({[{<<"k">>, null}]})),

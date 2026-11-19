@@ -46,7 +46,8 @@
     | #{Key => json(Key)}.
 -opaque document() :: reference().
 -opaque pointers() :: reference().
--type decode_error() :: binary() | nesting_too_deep | nonexistent_atom | atom_too_long.
+-type decode_error() ::
+    binary() | nesting_too_deep | nonexistent_atom | atom_too_long | exponent_too_large.
 -type encode_error() ::
     nesting_too_deep
     | unsupported_type
@@ -74,11 +75,22 @@ decode(Json) ->
     "`existing_atom` decodes them to atoms that already exist and returns "
     "`{error, nonexistent_atom}` for a key that names none. An atom name "
     "has at most 255 characters, so with `atom` a longer key returns "
-    "`{error, atom_too_long}`.").
--spec decode(binary(), [{strings, reference | copy} | {keys, binary | atom | existing_atom}]) ->
-    {ok, json(binary() | atom())} | {error, decode_error()}.
+    "`{error, atom_too_long}`.\n\n"
+    "`{floats, native | decimal}`. With `native` (the default), a number "
+    "written with a fraction or an exponent decodes to a float. `decimal` "
+    "decodes it to the map Elixir's Decimal library uses for its struct, "
+    "`#{'__struct__' => 'Elixir.Decimal', sign => 1 | -1, coef => "
+    "non_neg_integer(), exp => integer()}`, whose value is `sign * coef * "
+    "10^exp`, with every digit of the number's text kept. An exponent that "
+    "does not fit in 64 bits returns `{error, exponent_too_large}`.").
+-spec decode(binary(), [
+    {strings, reference | copy}
+    | {keys, binary | atom | existing_atom}
+    | {floats, native | decimal}
+]) ->
+    {ok, term()} | {error, decode_error()}.
 decode(Json, Opts) when is_binary(Json), is_list(Opts) ->
-    check_opts(Opts, [strings, keys]),
+    check_opts(Opts, [strings, keys, floats]),
     Copy =
         case proplists:get_value(strings, Opts, reference) of
             reference -> false;
@@ -90,9 +102,14 @@ decode(Json, Opts) when is_binary(Json), is_list(Opts) ->
             Keys0 when Keys0 =:= binary; Keys0 =:= atom; Keys0 =:= existing_atom -> Keys0;
             Keys0 -> erlang:error({invalid_option, {keys, Keys0}})
         end,
+    Floats =
+        case proplists:get_value(floats, Opts, native) of
+            Floats0 when Floats0 =:= native; Floats0 =:= decimal -> Floats0;
+            Floats0 -> erlang:error({invalid_option, {floats, Floats0}})
+        end,
     case byte_size(Json) > ?TIMESLICE_BYTES of
-        true -> ?NIF:decode_opts_dirty(Json, Copy, Keys, native, null);
-        false -> ?NIF:decode_opts(Json, Copy, Keys, native, null)
+        true -> ?NIF:decode_opts_dirty(Json, Copy, Keys, Floats, null);
+        false -> ?NIF:decode_opts(Json, Copy, Keys, Floats, null)
     end.
 
 ?DOC("Same as `encode(Term, [])`.").
