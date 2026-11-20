@@ -11,22 +11,20 @@ defmodule Torque.DecodeDecimalsTest do
   end
 
   defp float_token do
+    fraction = map(digits(1..25), &("." <> &1))
+    exponent = map({member_of(~w(e E)), member_of(["", "+", "-"]), digits(1..4)}, &join/1)
+
     gen all(
           sign <- member_of(["", "-"]),
           integer <- one_of([constant("0"), map({integer(?1..?9), digits(0..25)}, &join/1)]),
-          fraction <- one_of([constant(""), map(digits(1..25), &("." <> &1))]),
-          exponent <-
-            one_of([
-              constant(""),
-              map({member_of(~w(e E)), member_of(["", "+", "-"]), digits(1..4)}, &join/1)
-            ]),
-          fraction != "" or exponent != ""
+          tail <- one_of([fraction, exponent, map({fraction, exponent}, &join/1)])
         ) do
-      sign <> integer <> fraction <> exponent
+      sign <> integer <> tail
     end
   end
 
-  defp join({first, rest}), do: <<first>> <> rest
+  defp join({first, rest}) when is_integer(first), do: <<first>> <> rest
+  defp join({first, rest}) when is_binary(first), do: first <> rest
   defp join({e, sign, digits}), do: e <> sign <> digits
 
   property "a float decodes to what Decimal.new/1 makes of its text" do
