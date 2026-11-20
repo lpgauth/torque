@@ -59,7 +59,7 @@ defmodule Torque do
   | array | list |
   | string | binary |
   | integer | integer |
-  | float | float |
+  | float | float (a `Decimal` struct with `decode/2`'s `:floats`) |
   | `true` / `false` | `true` / `false` |
   | `null` | `nil` |
 
@@ -119,6 +119,15 @@ defmodule Torque do
       that names none. An atom name has at most 255 characters, so with
       `:atoms` a longer key returns `{:error, :atom_too_long}`.
 
+    * `:floats`: `:native` (the default) decodes a number written with a
+      fraction or an exponent to a float. `:decimals` decodes it to a
+      `Decimal` struct holding every digit of its text, as `Decimal.new/1`
+      would: `1.10` keeps its trailing zero, and `1e400`, which no float
+      holds, is accepted. Integers stay integers. Torque builds the struct
+      itself and does not depend on [Decimal](https://hex.pm/packages/decimal):
+      add it to your own dependencies to work with the values. An exponent
+      that does not fit in 64 bits returns `{:error, :exponent_too_large}`.
+
   Any other option raises `ArgumentError`.
 
   ## Examples
@@ -141,7 +150,12 @@ defmodule Torque do
   @doc group: :decode
   @spec decode(binary(), keyword()) ::
           {:ok, term()}
-          | {:error, binary() | :nesting_too_deep | :nonexistent_atom | :atom_too_long}
+          | {:error,
+             binary()
+             | :nesting_too_deep
+             | :nonexistent_atom
+             | :atom_too_long
+             | :exponent_too_large}
   def decode(json, opts \\ [])
 
   def decode(json, []) when is_binary(json) and byte_size(json) > @timeslice_bytes do
@@ -153,18 +167,27 @@ defmodule Torque do
   end
 
   def decode(json, opts) when is_binary(json) and byte_size(json) > @timeslice_bytes do
-    {copy_strings, object_keys} = decode_options!(opts)
-    Torque.Native.decode_opts_dirty(json, copy_strings, object_keys, nil)
+    {copy_strings, object_keys, floats} = decode_options!(opts)
+    Torque.Native.decode_opts_dirty(json, copy_strings, object_keys, floats, nil)
   end
 
   def decode(json, opts) when is_binary(json) do
-    {copy_strings, object_keys} = decode_options!(opts)
-    Torque.Native.decode_opts(json, copy_strings, object_keys, nil)
+    {copy_strings, object_keys, floats} = decode_options!(opts)
+    Torque.Native.decode_opts(json, copy_strings, object_keys, floats, nil)
   end
 
   defp decode_options!(opts) do
-    validated = Keyword.validate!(opts, strings: :reference, keys: :strings)
-    {copy_strings!(validated[:strings]), object_keys!(validated[:keys])}
+    validated = Keyword.validate!(opts, strings: :reference, keys: :strings, floats: :native)
+
+    {copy_strings!(validated[:strings]), object_keys!(validated[:keys]),
+     floats!(validated[:floats])}
+  end
+
+  defp floats!(:native), do: :native
+  defp floats!(:decimals), do: :decimal
+
+  defp floats!(other) do
+    raise ArgumentError, "expected :floats to be :native or :decimals, got: #{inspect(other)}"
   end
 
   defp copy_strings!(:reference), do: false

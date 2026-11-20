@@ -32,6 +32,24 @@ pub trait JsonVisitor<'de> {
         self.visit_f64(as_f64)
     }
 
+    /// Torque patch: a number token with a fraction or an exponent, with its
+    /// source text. The default drops the text.
+    fn visit_float(&mut self, val: f64, _raw: &str) -> bool {
+        self.visit_f64(val)
+    }
+
+    /// Torque patch: whether a float token whose value is beyond `f64`, such
+    /// as `1e400`, goes to `visit_huge_float` instead of failing the parse.
+    fn accepts_huge_floats(&self) -> bool {
+        false
+    }
+
+    /// Torque patch: a float token whose value is beyond `f64`, as its
+    /// source text. Called only when `accepts_huge_floats` is true.
+    fn visit_huge_float(&mut self, _raw: &str) -> bool {
+        false
+    }
+
     fn visit_raw_number(&mut self, _val: &str) -> bool {
         false
     }

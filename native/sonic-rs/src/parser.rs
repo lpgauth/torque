@@ -338,14 +338,19 @@ where
     #[cold]
     #[inline(never)]
     pub(crate) fn huge_int(&mut self, start: usize, first: u8, err: Error) -> Result<&'de str> {
-        self.read.set_index(start + 1);
-        if self.do_skip_number(first).is_ok() {
-            let token = self.read.slice_unchecked(start, self.read.index());
-            if is_integer_token(token) {
-                return Ok(as_str(token));
-            }
+        match self.huge_number(start, first) {
+            Some(token) if is_integer_token(token.as_bytes()) => Ok(token),
+            _ => Err(err),
         }
-        Err(err)
+    }
+
+    /// The well-formed number token starting at `start`, whatever its size.
+    #[cold]
+    #[inline(never)]
+    fn huge_number(&mut self, start: usize, first: u8) -> Option<&'de str> {
+        self.read.set_index(start + 1);
+        self.do_skip_number(first).ok()?;
+        Some(as_str(self.read.slice_unchecked(start, self.read.index())))
     }
 
     #[inline(always)]
@@ -478,6 +483,14 @@ where
             let number = match parsed {
                 Ok(number) => number,
                 Err(err) => {
+                    if vis.accepts_huge_floats() {
+                        let Some(raw) = self.huge_number(start, first) else {
+                            return Err(err);
+                        };
+                        if !is_integer_token(raw.as_bytes()) {
+                            return check_visit!(self, vis.visit_huge_float(raw));
+                        }
+                    }
                     let raw = self.huge_int(start, first, err)?;
                     let inf = if first == b'-' {
                         f64::NEG_INFINITY
@@ -493,7 +506,7 @@ where
                     if is_integer_token(slice) {
                         vis.visit_overflow_int(as_str(slice), f)
                     } else {
-                        vis.visit_f64(restore_neg_zero(f, slice))
+                        vis.visit_float(restore_neg_zero(f, slice), as_str(slice))
                     }
                 }
                 ParserNumber::Unsigned(f) => vis.visit_u64(f),
