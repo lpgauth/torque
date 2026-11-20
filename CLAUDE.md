@@ -22,6 +22,17 @@ MIX_ENV=bench mix run bench/torque_bench.exs  # run benchmarks
 
 `TORQUE_BUILD=true` is required for local development. Both build tools get the NIF from `rebar/fetch_nif.escript`: Mix through the `:torque_nif` compiler defined at the top of `mix.exs`, which runs before the Elixir compiler on every `mix compile`, and rebar3 through a pre-compile hook. With the variable set the script runs `cargo build --release` in `native/torque_nif` (so the repository's `.cargo/config.toml` and its `target-cpu=native` apply) and reinstalls `priv/native/torque_nif.so` only when the bytes change; cargo decides what is stale, the vendored sonic-rs included. Without it the script downloads the release asset for the app file's version, which exists only for published versions. `priv/native/torque_nif.stamp` records where the installed library came from (an asset name or `source`), so switching between the two never leaves a released binary running against local Rust changes.
 
+## Rust style
+
+New Rust in `native/torque_nif` and in Torque's patches to `native/sonic-rs` follows the [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html). The rules that come up most here:
+
+- An enum rather than a `bool` for a parameter whose meaning is not obvious at the call site.
+- Named fields rather than tuples, outside very local code.
+- A doc comment on every public item, and a `SAFETY:` comment on every `unsafe` block.
+- `match` or `if let` rather than a check followed by `unwrap`; `expect` with the reason when a panic is intended.
+
+Formatting stays `cargo fmt` with its defaults. Existing code that predates this (functions called unqualified, imports from one module grouped in braces) is not restyled in passing: match the file being edited. Upstream sonic-rs code is left as vendored.
+
 ## Profile-Guided Optimisation (PGO)
 
 ```bash
